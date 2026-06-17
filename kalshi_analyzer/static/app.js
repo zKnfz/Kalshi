@@ -22,6 +22,7 @@
 
   const state = {
     opps: new Map(),
+    baskets: [],
     stats: {},
     generatedAt: null,
     source: '…',
@@ -31,7 +32,9 @@
     minEdgePct: 2.0,
     hideInfeasible: false,
     activeStrategies: new Set(),
+    sportsFilter: false,
     knownStrategies: new Set(),
+    collapsedBaskets: new Set(),
     justUpdated: new Map(),
     justAdded: new Map(),
   };
@@ -78,12 +81,36 @@
     return fmtSeconds(diff) + ' ago';
   }
 
+  function isInfeasible(o) {
+    if (o.fill_feasible === false) return true;
+    if ((o.liquidity ?? 0) <= 0) return true;
+    if (o.basket_complete === false) return true;
+    return false;
+  }
+
   function setConnection(online) {
     els.conn.textContent = online ? 'live' : 'offline';
     els.conn.classList.toggle('online', online);
   }
 
+  function ensureSportsChip() {
+    let chip = document.getElementById('sports_filter_chip');
+    if (chip) return chip;
+    chip = document.createElement('span');
+    chip.id = 'sports_filter_chip';
+    chip.className = 'chip sports';
+    chip.textContent = 'Sports';
+    chip.addEventListener('click', () => {
+      state.sportsFilter = !state.sportsFilter;
+      chip.classList.toggle('active', state.sportsFilter);
+      render();
+    });
+    els.strategyFilters.appendChild(chip);
+    return chip;
+  }
+
   function renderStrategyChips() {
+    ensureSportsChip();
     const wanted = Array.from(state.knownStrategies).sort();
     const existing = new Map();
     Array.from(els.strategyFilters.children).forEach((node) => {
@@ -110,9 +137,10 @@
   function applyFilters(ops) {
     const q = state.filter.trim().toLowerCase();
     return ops.filter((o) => {
-      if (state.hideInfeasible && o.fill_feasible === false) return false;
-      const cmp = (o.net_edge_pct !== undefined) ? o.net_edge_pct : o.edge_pct;
+      if (state.hideInfeasible && isInfeasible(o)) return false;
+      const cmp = o.net_edge_pct !== undefined ? o.net_edge_pct : o.edge_pct;
       if ((cmp ?? 0) < state.minEdgePct) return false;
+      if (state.sportsFilter && !o.is_sports) return false;
       if (state.activeStrategies.size) {
         const sigSet = new Set(o.signal_types || [o.strategy]);
         let match = false;
@@ -125,18 +153,67 @@
       }
       if (!q) return true;
       const sigs = (o.signal_types || []).join(' ');
-      const hay = `${o.title} ${o.ticker} ${o.strategy} ${sigs} ${o.side}`.toLowerCase();
+      const hay = `${o.title} ${o.ticker} ${o.strategy} ${sigs} ${o.side} ${o.series_ticker || ''}`.toLowerCase();
       return hay.includes(q);
     });
   }
 
+  function applyBasketFilters(baskets) {
+    return baskets.filter((b) => {
+      if (state.sportsFilter && !b.is_sports) return false;
+      if (state.hideInfeasible) {
+        if (b.basket_complete === false) return false;
+        if ((b.worst_liquidity ?? 0) <= 0) return false;
+      }
+      const cmp = b.net_edge_pct !== undefined ? b.net_edge_pct : b.edge_pct;
+      if ((cmp ?? 0) < state.minEdgePct) return false;
+      if (state.activeStrategies.size && !state.activeStrategies.has(b.strategy))
+        return false;
+      if (!state.filter.trim()) return true;
+      const q = state.filter.trim().toLowerCase();
+      const hay = `${b.basket_id} ${b.series_ticker || ''} ${b.event_ticker || ''} ${b.strategy}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }
+
+  function liveRank(o) {
+    if (o.live_status === 'LIVE') return 0;
+    if (o.live_status === 'TODAY') return 1;
+    return 2;
+  }
+
   function sortOps(ops) {
     const k = state.sortKey;
-    return ops.slice().sort((a, b) => (b[k] ?? 0) - (a[k] ?? 0));
+    const sorted = ops.slice().sort((a, b) => {
+      if (state.sportsFilter) {
+        const lr = liveRank(a) - liveRank(b);
+        if (lr !== 0) return lr;
+      }
+      return (b[k] ?? 0) - (a[k] ?? 0);
+    });
+    return sorted;
+  }
+
+  function sortBaskets(baskets) {
+    return baskets.slice().sort((a, b) => {
+      if (state.sportsFilter) {
+        const liveOrder = { LIVE: 0, TODAY: 1 };
+        const la = liveOrder[a.live_status] ?? 2;
+        const lb = liveOrder[b.live_status] ?? 2;
+        if (la !== lb) return la - lb;
+      }
+      return (b.net_edge_pct ?? 0) - (a.net_edge_pct ?? 0);
+    });
   }
 
   function sideClass(side) {
     return side.replace('+', '').replace(' ', '');
+  }
+
+  function liveBadgeHTML(status) {
+    if (status === 'LIVE') return '<span class="badge-warn badge-live">🔴 LIVE</span>';
+    if (status === 'TODAY') return '<span class="badge-warn badge-today">⚡ TODAY</span>';
+    return '';
   }
 
   function signalChipsHTML(o) {
@@ -155,6 +232,10 @@
           }</span>`;
         })
         .join('') +
+      (o.basket_complete === false
+        ? '<span class="signal-chip warn">⚠ Incomplete basket</span>'
+        : '') +
+      liveBadgeHTML(o.live_status) +
       `</div>`
     );
   }
@@ -162,7 +243,7 @@
   function cardHTML(o) {
     const sideBadge = `<span class="badge ${sideClass(o.side)}">${o.side}</span>`;
     const conf = Math.max(0, Math.min(100, Math.round((o.confidence || 0) * 100)));
-    const infeasibleClass = o.fill_feasible === false ? ' infeasible' : '';
+    const infeasibleClass = isInfeasible(o) ? ' infeasible' : '';
     const ageClass =
       o.last_trade_age_seconds && o.last_trade_age_seconds > 60 ? ' stale' : '';
     const ageLabel =
@@ -234,6 +315,44 @@
     `;
   }
 
+  function basketLegHTML(leg) {
+    return `<div class="card in-basket${isInfeasible(leg) ? ' infeasible' : ''}">${cardHTML(leg).replace(/^<article[^>]*>/, '').replace(/<\/article>$/, '')}</div>`;
+  }
+
+  function basketHTML(b) {
+    const collapsed = state.collapsedBaskets.has(b.basket_id);
+    const incompleteClass = b.basket_complete === false ? ' incomplete' : '';
+    const legsJson = escapeAttr(JSON.stringify(b.legs || []));
+    return `
+      <section class="basket-card${incompleteClass}" data-basket="${escapeAttr(b.basket_id)}">
+        <div class="basket-header" data-toggle-basket="${escapeAttr(b.basket_id)}">
+          <div>
+            <div class="signal-chips">
+              <span class="signal-chip arb">${STRATEGY_LABEL[b.strategy] || b.strategy}</span>
+              ${b.basket_complete === false ? '<span class="badge-warn">⚠ Incomplete basket</span>' : ''}
+              ${liveBadgeHTML(b.live_status)}
+            </div>
+            <h3>Basket · ${b.series_ticker || b.event_ticker || b.basket_id}</h3>
+            <div class="ticker">${b.basket_id}</div>
+          </div>
+          <span class="badge YES">${b.legs.length} legs</span>
+        </div>
+        <div class="basket-summary">
+          <span>Edge / Net: ${fmtPct(b.edge_pct, 1)} / ${fmtPct(b.net_edge_pct, 1)}</span>
+          <span>Total stake: ${fmtMoney(b.total_stake)}</span>
+          <span>Worst liq: ${fmtInt(b.worst_liquidity)}</span>
+        </div>
+        <div class="basket-actions">
+          <button class="copy-btn" data-copy-basket='${legsJson}'>Copy basket params</button>
+          <button class="copy-btn execute-btn" data-exec-basket='${escapeAttr(JSON.stringify({ basket_id: b.basket_id, legs: b.legs }))}'>Execute basket</button>
+        </div>
+        <div class="basket-legs${collapsed ? ' collapsed' : ''}">
+          ${(b.legs || []).map(basketLegHTML).join('')}
+        </div>
+      </section>
+    `;
+  }
+
   function escapeAttr(s) {
     return String(s).replace(/&/g, '&amp;').replace(/'/g, '&apos;').replace(/"/g, '&quot;');
   }
@@ -248,7 +367,7 @@
   }
 
   function attachCopyHandlers() {
-    els.grid.querySelectorAll('.copy-btn').forEach((btn) => {
+    els.grid.querySelectorAll('.copy-btn[data-copy]').forEach((btn) => {
       if (btn.dataset.bound) return;
       btn.dataset.bound = '1';
       btn.addEventListener('click', () => {
@@ -267,10 +386,75 @@
           navigator.clipboard
             .writeText(text)
             .then(() => showToast('Trade params copied'))
-            .catch(() => showToast('Clipboard blocked — params:\n' + text));
+            .catch(() => showToast('Clipboard blocked'));
         } catch (e) {
           showToast('Copy failed');
         }
+      });
+    });
+
+    els.grid.querySelectorAll('.copy-btn[data-copy-basket]').forEach((btn) => {
+      if (btn.dataset.boundBasket) return;
+      btn.dataset.boundBasket = '1';
+      btn.addEventListener('click', () => {
+        try {
+          const legs = JSON.parse(btn.dataset.copyBasket);
+          const text = legs
+            .map(
+              (l) =>
+                `${l.ticker}\t${l.side}\t${(l.entry_price * 100).toFixed(1)}¢\t$${(l.suggested_stake || 0).toFixed(2)}`
+            )
+            .join('\n');
+          navigator.clipboard
+            .writeText(text)
+            .then(() => showToast('Basket params copied'))
+            .catch(() => showToast('Clipboard blocked'));
+        } catch (e) {
+          showToast('Copy failed');
+        }
+      });
+    });
+
+    els.grid.querySelectorAll('.execute-btn[data-exec-basket]').forEach((btn) => {
+      if (btn.dataset.boundExec) return;
+      btn.dataset.boundExec = '1';
+      btn.addEventListener('click', async () => {
+        try {
+          const payload = JSON.parse(btn.dataset.execBasket);
+          const res = await fetch('/api/execute-basket', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              basket_id: payload.basket_id,
+              legs: (payload.legs || []).map((l) => ({
+                ticker: l.ticker,
+                side: l.side,
+                limit_price: l.entry_price,
+                contracts: Math.max(1, Math.round((l.suggested_stake || 0) / Math.max(l.entry_price, 0.01))),
+                liquidity: l.liquidity,
+              })),
+            }),
+          });
+          const data = await res.json();
+          showToast(
+            data.accepted
+              ? `Basket executed (${data.legs?.length || 0} legs)`
+              : `Basket rejected: ${data.rejection_reason || data.error || 'unknown'}`
+          );
+        } catch (e) {
+          showToast('Execute failed');
+        }
+      });
+    });
+
+    els.grid.querySelectorAll('[data-toggle-basket]').forEach((node) => {
+      if (node.dataset.boundToggle) return;
+      node.dataset.boundToggle = '1';
+      node.addEventListener('click', () => {
+        const id = node.dataset.toggleBasket;
+        if (state.collapsedBaskets.has(id)) state.collapsedBaskets.delete(id);
+        else state.collapsedBaskets.add(id);
+        render();
       });
     });
   }
@@ -304,19 +488,38 @@
       els.paperPnl.style.color = pnl >= 0 ? 'var(--accent)' : 'var(--danger)';
     }
 
-    let filtered = applyFilters(opsArr);
-    filtered = sortOps(filtered);
-    els.oppCount.textContent = filtered.length;
-    if (!filtered.length) {
+    const basketIds = new Set(
+      (state.baskets || []).map((b) => b.basket_id).filter(Boolean)
+    );
+    const standaloneOps = opsArr.filter((o) => {
+      if (!o.basket_id) return true;
+      if (!basketIds.has(o.basket_id)) return true;
+      return !['dutch_book_arbitrage', 'dutch_book_mispricing'].includes(
+        o.strategy
+      );
+    });
+
+    let filteredOps = applyFilters(standaloneOps);
+    filteredOps = sortOps(filteredOps);
+
+    let filteredBaskets = applyBasketFilters(state.baskets || []);
+    filteredBaskets = sortBaskets(filteredBaskets);
+
+    const totalVisible = filteredOps.length + filteredBaskets.length;
+    els.oppCount.textContent = totalVisible;
+    if (!totalVisible) {
       els.grid.innerHTML = '';
       els.empty.hidden = false;
       return;
     }
     els.empty.hidden = true;
-    els.grid.innerHTML = filtered.map(cardHTML).join('');
+    els.grid.innerHTML =
+      filteredBaskets.map(basketHTML).join('') +
+      filteredOps.map(cardHTML).join('');
     const now = Date.now();
     els.grid.querySelectorAll('.card').forEach((card) => {
       const key = card.dataset.key;
+      if (!key) return;
       const addedAt = state.justAdded.get(key);
       const updatedAt = state.justUpdated.get(key);
       if (addedAt && now - addedAt < 1500) card.classList.add('new');
@@ -333,6 +536,7 @@
     for (const o of snap.opportunities || []) {
       state.opps.set(keyOf(o), o);
     }
+    state.baskets = snap.baskets || [];
     state.stats = snap.stats || {};
     state.generatedAt = snap.generated_at;
     state.source = snap.source;
@@ -355,6 +559,7 @@
       state.justUpdated.delete(key);
       state.justAdded.delete(key);
     }
+    if (delta.baskets) state.baskets = delta.baskets;
     state.stats = delta.stats || state.stats;
     state.generatedAt = delta.generated_at || state.generatedAt;
     render();
@@ -416,7 +621,6 @@
   setInterval(() => {
     if (state.generatedAt) {
       els.generated_at.textContent = timeAgo(state.generatedAt);
-      render();
     }
   }, 5000);
 

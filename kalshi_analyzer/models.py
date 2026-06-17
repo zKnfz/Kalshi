@@ -247,6 +247,11 @@ class Opportunity:
     rationale: str
     signal_types: list[str] = field(default_factory=list)
     fill_feasible: bool = True
+    basket_complete: bool = True
+    basket_id: str | None = None
+    series_ticker: str = ""
+    is_sports: bool = False
+    live_status: str | None = None
     fees_per_contract: float = 0.0
     net_edge: float = 0.0
     net_edge_pct: float = 0.0
@@ -275,6 +280,10 @@ class Opportunity:
             round(self.confidence, 3),
             round(self.score, 3),
             self.fill_feasible,
+            self.basket_complete,
+            self.basket_id,
+            self.is_sports,
+            self.live_status,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -286,6 +295,11 @@ class Opportunity:
             "strategy": self.strategy,
             "signal_types": list(self.signal_types),
             "fill_feasible": self.fill_feasible,
+            "basket_complete": self.basket_complete,
+            "basket_id": self.basket_id,
+            "series_ticker": self.series_ticker,
+            "is_sports": self.is_sports,
+            "live_status": self.live_status,
             "fees_per_contract": round(self.fees_per_contract, 4),
             "net_edge": round(self.net_edge, 4),
             "net_edge_pct": round(self.net_edge_pct, 2),

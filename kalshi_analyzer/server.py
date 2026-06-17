@@ -9,10 +9,12 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from .alerts import AlertDispatcher
 from .config import settings
 from .engine import AnalyzerEngine
+from .execution import BasketLeg
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +75,11 @@ class WebSocketBroker:
 broker = WebSocketBroker()
 engine: AnalyzerEngine | None = None
 alerts: AlertDispatcher | None = None
+
+
+class ExecuteBasketRequest(BaseModel):
+    basket_id: str = ""
+    legs: list[dict] = Field(default_factory=list)
 
 
 def _schedule_broadcast(snapshot: dict, delta: dict) -> None:
@@ -163,6 +170,28 @@ async def clear_kill_switch_endpoint() -> JSONResponse:
 
     clear_kill_switch()
     return JSONResponse({"tripped": False})
+
+
+@app.post("/api/execute-basket")
+async def execute_basket(body: ExecuteBasketRequest) -> JSONResponse:
+    if not engine:
+        return JSONResponse({"accepted": False, "error": "engine unavailable"}, status_code=503)
+    legs = [
+        BasketLeg(
+            ticker=str(leg.get("ticker", "")),
+            side=str(leg.get("side", "YES")).upper(),
+            contracts=int(leg.get("contracts") or settings.min_fill_qty),
+            limit_price=float(leg.get("limit_price") or leg.get("entry_price") or 0),
+            liquidity=int(leg.get("liquidity") or 0),
+        )
+        for leg in body.legs
+        if leg.get("ticker")
+    ]
+    result = await engine._executor.submit_basket(
+        basket_id=body.basket_id or "manual",
+        legs=legs,
+    )
+    return JSONResponse(result.to_dict())
 
 
 @app.websocket("/ws")

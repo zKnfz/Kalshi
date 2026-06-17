@@ -34,6 +34,7 @@ Everything here is async-safe but executes sequentially per process —
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -52,6 +53,33 @@ log = logging.getLogger(__name__)
 
 def _today_utc() -> str:
     return datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+
+
+@dataclass
+class BasketLeg:
+    ticker: str
+    side: str
+    contracts: int
+    limit_price: float
+    liquidity: int = 0
+
+
+@dataclass
+class BasketResult:
+    accepted: bool
+    mode: str
+    basket_id: str
+    legs: list[OrderResult] = field(default_factory=list)
+    rejection_reason: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "accepted": self.accepted,
+            "mode": self.mode,
+            "basket_id": self.basket_id,
+            "legs": [leg.to_dict() for leg in self.legs],
+            "rejection_reason": self.rejection_reason,
+        }
 
 
 @dataclass
@@ -166,6 +194,7 @@ class Executor:
         is_taker: bool = True,
         allow_pyramid: bool = False,
         notes: str = "",
+        time_in_force: str = "gtc",
     ) -> OrderResult:
         side = side.upper()
         contracts = max(0, int(contracts))
@@ -262,6 +291,7 @@ class Executor:
             "side": "yes" if side == "YES" else "no",
             "ticker": ticker,
             "type": "limit",
+            "time_in_force": time_in_force,
             "yes_price": int(round(limit_price * 100))
             if side == "YES"
             else None,
@@ -293,6 +323,97 @@ class Executor:
             requested_price=limit_price,
             live_response=response,
         )
+
+    async def submit_basket(
+        self,
+        *,
+        basket_id: str,
+        legs: list[BasketLeg],
+    ) -> BasketResult:
+        """Execute a multi-leg dutch-book basket with ordered IOC interlocking.
+
+        Legs are sorted by lowest liquidity first (highest fail risk). Each leg
+        must fill before the next is attempted. On any failure the basket aborts
+        and any live orders placed so far are cancelled.
+        """
+
+        if not legs:
+            return BasketResult(
+                accepted=False,
+                mode=self.mode,
+                basket_id=basket_id,
+                rejection_reason="empty basket",
+            )
+
+        ordered = sorted(legs, key=lambda leg: leg.liquidity)
+        results: list[OrderResult] = []
+        for leg in ordered:
+            try:
+                result = await asyncio.wait_for(
+                    self.submit(
+                        ticker=leg.ticker,
+                        side=leg.side,
+                        contracts=leg.contracts,
+                        limit_price=leg.limit_price,
+                        is_taker=True,
+                        allow_pyramid=True,
+                        notes=f"basket:{basket_id}",
+                        time_in_force="immediate_or_cancel",
+                    ),
+                    timeout=settings.arb_fill_timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                await self._cancel_basket_orders(results)
+                return BasketResult(
+                    accepted=False,
+                    mode=self.mode,
+                    basket_id=basket_id,
+                    legs=results,
+                    rejection_reason=(
+                        f"timeout after {settings.arb_fill_timeout_seconds:.1f}s "
+                        f"on {leg.ticker} {leg.side}"
+                    ),
+                )
+
+            results.append(result)
+            if not result.accepted:
+                await self._cancel_basket_orders(results)
+                return BasketResult(
+                    accepted=False,
+                    mode=self.mode,
+                    basket_id=basket_id,
+                    legs=results,
+                    rejection_reason=(
+                        f"leg failed: {leg.ticker} {leg.side} — "
+                        f"{result.rejection_reason}"
+                    ),
+                )
+
+        return BasketResult(
+            accepted=True,
+            mode=self.mode,
+            basket_id=basket_id,
+            legs=results,
+        )
+
+    async def _cancel_basket_orders(self, results: list[OrderResult]) -> None:
+        if self.mode != "live" or self._client is None or not self._client.has_auth:
+            return
+        for result in results:
+            if not result.accepted or not result.live_response:
+                continue
+            order_id = (
+                result.live_response.get("order", {}).get("order_id")
+                or result.live_response.get("order_id")
+            )
+            if not order_id:
+                continue
+            try:
+                await self._client.delete_authenticated(
+                    f"/portfolio/orders/{order_id}"
+                )
+            except Exception as exc:
+                log.warning("failed to cancel order %s: %s", order_id, exc)
 
     def _track_reject(self, reason: str) -> None:
         key = reason.split(":")[0].split("(")[0].strip()[:80] or "unknown"

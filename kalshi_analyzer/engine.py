@@ -6,11 +6,11 @@ import random
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from .analyzer import evaluate_markets
+from .analyzer import evaluate_markets, group_baskets
 from .auth import load_auth_from_settings
 from .backtest import append_snapshot
 from .client import KalshiClient
-from .config import settings
+from .config import effective_native_ws, settings
 from .execution import Executor
 from .models import Event, Market, Opportunity
 from .paper import PaperEngine
@@ -19,6 +19,7 @@ from .polymarket import (
     find_cross_arbs,
     load_manual_match_map,
 )
+from .ws_client import KalshiWebSocket
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +97,8 @@ class AnalyzerEngine:
             self._poly_client = PolymarketClient()
         self._poly_markets_cache: list = []
         self._poly_last_fetch: float = 0.0
+        self._ws: KalshiWebSocket | None = None
+        self._ws_patches: dict[str, dict[str, Any]] = {}
 
     @property
     def latest(self) -> dict[str, Any]:
@@ -105,10 +108,20 @@ class AnalyzerEngine:
         if self._task and not self._task.done():
             return
         self._stop.clear()
+        if effective_native_ws() and self._client.has_auth:
+            auth = load_auth_from_settings(settings)
+            if auth is not None:
+                self._ws = KalshiWebSocket(
+                    rest_base_url=settings.base_url,
+                    auth=auth,
+                    on_update=self._on_ws_market_update,
+                )
         self._task = asyncio.create_task(self._run(), name="kalshi-analyzer")
 
     async def stop(self) -> None:
         self._stop.set()
+        if self._ws:
+            await self._ws.stop()
         if self._task:
             try:
                 await asyncio.wait_for(self._task, timeout=5)
@@ -154,9 +167,14 @@ class AnalyzerEngine:
             source = "demo"
         else:
             events = await self._load_events_from_kalshi()
-            source = "kalshi"
+            source = "kalshi-ws" if effective_native_ws() and self._ws else "kalshi"
 
+        events = self._apply_ws_patches(events)
         all_markets = [m for ev in events for m in ev.markets]
+        if self._ws and all_markets:
+            tickers = [m.ticker for m in all_markets if m.ticker]
+            if tickers:
+                await self._ws.start(tickers[: settings.max_markets])
         opportunities = evaluate_markets(events)
 
         if self._poly_client is not None:
@@ -224,10 +242,12 @@ class AnalyzerEngine:
                 "min_net_edge_pct": settings.min_net_edge_pct,
                 "poll_interval_seconds": settings.poll_interval_seconds,
                 "poll_jitter_pct": settings.poll_jitter_pct,
+                "native_ws": effective_native_ws(),
                 "execution": self._executor.stats(),
                 "paper_pnl": paper_pnl,
             },
             "opportunities": [op.to_dict() for op in opportunities],
+            "baskets": group_baskets(opportunities),
         }
 
         delta = self._compute_delta(opportunities, snapshot)
@@ -282,6 +302,7 @@ class AnalyzerEngine:
             "type": "delta",
             "generated_at": snapshot["generated_at"],
             "stats": snapshot["stats"],
+            "baskets": snapshot.get("baskets", []),
             "added": added,
             "updated": updated,
             "removed": removed,
@@ -331,6 +352,36 @@ class AnalyzerEngine:
             )
             for ev, ms in bucket.items()
         ]
+
+    async def _on_ws_market_update(self, payload: dict[str, Any]) -> None:
+        ticker = payload.get("ticker")
+        if ticker:
+            self._ws_patches[ticker] = payload
+
+    def _apply_ws_patches(self, events: list[Event]) -> list[Event]:
+        if not self._ws_patches:
+            return events
+        patched: list[Event] = []
+        for ev in events:
+            new_markets: list[Market] = []
+            for m in ev.markets:
+                patch = self._ws_patches.get(m.ticker)
+                if not patch:
+                    new_markets.append(m)
+                    continue
+                merged = {**m.raw, **patch, "ticker": m.ticker}
+                new_markets.append(Market.from_api(merged))
+            patched.append(
+                Event(
+                    event_ticker=ev.event_ticker,
+                    title=ev.title,
+                    category=ev.category,
+                    mutually_exclusive=ev.mutually_exclusive,
+                    markets=new_markets,
+                    raw=ev.raw,
+                )
+            )
+        return patched
 
 
 def _build_demo_events() -> list[Event]:
