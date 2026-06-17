@@ -76,6 +76,39 @@ def _pick(data: dict[str, Any], *names: str) -> Any:
     return None
 
 
+def _parse_dt(value: Any) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(s)
+        except ValueError:
+            return None
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return None
+
+
+def _compute_trade_age_seconds(data: dict[str, Any]) -> float | None:
+    raw = _pick(data, "last_trade_time", "last_trade_at", "last_trade_ts")
+    dt = _parse_dt(raw)
+    if dt is None:
+        return None
+    delta = datetime.now(tz=timezone.utc) - dt
+    return max(0.0, delta.total_seconds())
+
+
 @dataclass
 class Market:
     """Snapshot of a single Kalshi binary market.
@@ -101,6 +134,8 @@ class Market:
     volume_24h: int = 0
     open_interest: int = 0
     liquidity: int = 0
+    last_trade_time: str | None = None
+    last_trade_age_seconds: float | None = None
     close_time: str | None = None
     category: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
@@ -127,6 +162,10 @@ class Market:
             volume_24h=_to_int(_pick(data, "volume_24h", "volume_24h_fp")),
             open_interest=_to_int(_pick(data, "open_interest", "open_interest_fp")),
             liquidity=_liquidity_to_cents(data),
+            last_trade_time=_pick(
+                data, "last_trade_time", "last_trade_at", "last_trade_ts"
+            ),
+            last_trade_age_seconds=_compute_trade_age_seconds(data),
             close_time=data.get("close_time"),
             category=data.get("category", ""),
             raw=data,
@@ -169,9 +208,23 @@ class Event:
         )
 
 
+def _utc_now_iso() -> str:
+    return (
+        datetime.now(tz=timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
+
+
 @dataclass
 class Opportunity:
-    """A scored betting opportunity surfaced by the analyzer."""
+    """A scored betting opportunity surfaced by the analyzer.
+
+    A single market/side may light up under multiple signals (e.g. a leg of
+    a dutch-book basket can also be cheap vs. its blended consensus). The
+    engine deduplicates per (ticker, side) and merges ``signal_types``
+    accordingly; this dataclass is the post-merge shape.
+    """
 
     ticker: str
     event_ticker: str
@@ -192,12 +245,33 @@ class Opportunity:
     spread_cents: int | None
     close_time: str | None
     rationale: str
+    signal_types: list[str] = field(default_factory=list)
+    fill_feasible: bool = True
+    last_trade_age_seconds: float | None = None
+    first_seen: str = field(default_factory=_utc_now_iso)
+    age_seconds: float = 0.0
     extra: dict[str, Any] = field(default_factory=dict)
-    generated_at: str = field(
-        default_factory=lambda: datetime.now(tz=timezone.utc)
-        .isoformat(timespec="seconds")
-        .replace("+00:00", "Z")
-    )
+    generated_at: str = field(default_factory=_utc_now_iso)
+
+    def key(self) -> tuple[str, str]:
+        return (self.ticker, self.side)
+
+    def fingerprint(self) -> tuple[Any, ...]:
+        """Cheap tuple used by the diff-broadcaster to detect changes."""
+
+        return (
+            self.ticker,
+            self.side,
+            tuple(sorted(self.signal_types)),
+            round(self.entry_price, 4),
+            round(self.fair_price, 4),
+            round(self.edge_pct, 2),
+            round(self.kelly_fraction, 4),
+            round(self.suggested_stake, 2),
+            round(self.confidence, 3),
+            round(self.score, 3),
+            self.fill_feasible,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -206,6 +280,8 @@ class Opportunity:
             "title": self.title,
             "side": self.side,
             "strategy": self.strategy,
+            "signal_types": list(self.signal_types),
+            "fill_feasible": self.fill_feasible,
             "entry_price": round(self.entry_price, 4),
             "fair_price": round(self.fair_price, 4),
             "edge": round(self.edge, 4),
@@ -219,6 +295,13 @@ class Opportunity:
             "volume_24h": self.volume_24h,
             "spread_cents": self.spread_cents,
             "close_time": self.close_time,
+            "last_trade_age_seconds": (
+                round(self.last_trade_age_seconds, 1)
+                if self.last_trade_age_seconds is not None
+                else None
+            ),
+            "first_seen": self.first_seen,
+            "age_seconds": round(self.age_seconds, 1),
             "rationale": self.rationale,
             "extra": self.extra,
             "generated_at": self.generated_at,
