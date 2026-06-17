@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kalshi Edge Analyzer</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">K∆</span>
+        <div>
+          <h1>Kalshi Edge Analyzer</h1>
+          <p class="tagline">
+            Real-time scan for arbitrage and positive-EV opportunities across
+            every open Kalshi market.
+          </p>
+        </div>
+      </div>
+      <div class="status">
+        <div class="stat">
+          <span class="label">Source</span>
+          <span id="source" class="value">…</span>
+        </div>
+        <div class="stat">
+          <span class="label">Last tick</span>
+          <span id="generated_at" class="value">—</span>
+        </div>
+        <div class="stat hide-sm">
+          <span class="label">Events / Markets</span>
+          <span id="counts" class="value">—</span>
+        </div>
+        <div class="stat">
+          <span class="label">Opportunities</span>
+          <span id="opp_count" class="value">0</span>
+        </div>
+        <div class="stat" id="exec_stat" hidden>
+          <span class="label">Execution</span>
+          <span id="exec_mode" class="value">off</span>
+        </div>
+        <div class="stat" id="paper_stat" hidden>
+          <span class="label">Paper P&amp;L</span>
+          <span id="paper_pnl" class="value">$0.00</span>
+        </div>
+        <div class="stat">
+          <span class="label">Connection</span>
+          <span id="conn" class="value pill">offline</span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="controls">
+        <input
+          id="filter"
+          type="text"
+          placeholder="Filter by title, ticker, signal…"
+          autocomplete="off"
+        />
+        <div class="strategy-filters" id="strategy_filters"></div>
+        <label class="sort">
+          Sort by
+          <select id="sort">
+            <option value="score">Score</option>
+            <option value="net_edge_pct">Net edge %</option>
+            <option value="edge_pct">Edge %</option>
+            <option value="edge">Edge ($)</option>
+            <option value="kelly_fraction">Kelly %</option>
+            <option value="suggested_stake">Stake $</option>
+            <option value="liquidity">Liquidity</option>
+            <option value="volume_24h">24h Volume</option>
+            <option value="age_seconds">Age</option>
+          </select>
+        </label>
+        <label class="slider">
+          <span>Min edge <span id="min_edge_val">2.0%</span></span>
+          <input
+            id="min_edge"
+            type="range"
+            min="0"
+            max="25"
+            step="0.5"
+            value="2"
+          />
+        </label>
+        <label class="toggle">
+          <input id="hide_infeasible" type="checkbox" />
+          <span>Hide infeasible</span>
+        </label>
+      </section>
+
+      <section class="grid" id="opps"></section>
+
+      <p id="empty" class="empty" hidden>
+        No live opportunities match your filters — adjust the min-edge
+        slider or wait for the next tick.
+      </p>
+    </main>
+
+    <footer>
+      <span
+        >Read-only signals based on Kalshi public market data. Not financial
+        advice.</span
+      >
+    </footer>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
