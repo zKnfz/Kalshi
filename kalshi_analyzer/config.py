@@ -79,9 +79,37 @@ class Settings:
     arb_bankroll_share: float = _env_float("ARB_BANKROLL_SHARE", 0.60)
     fairvalue_bankroll_share: float = _env_float("FAIRVALUE_BANKROLL_SHARE", 0.30)
     min_edge_pct: float = _env_float("MIN_EDGE_PCT", 0.5)
+    min_net_edge_pct: float = _env_float("MIN_NET_EDGE_PCT", 1.0)
+    assume_taker_fees: bool = _env_bool("ASSUME_TAKER_FEES", True)
     use_native_ws: bool = _env_bool("USE_NATIVE_WS", False)
     kalshi_key_id: str = os.getenv("KALSHI_KEY_ID", "")
     kalshi_private_key_path: str = os.getenv("KALSHI_PRIVATE_KEY_PATH", "")
+    execution_mode: str = os.getenv("EXECUTION_MODE", "off")
+    max_daily_loss: float = _env_float("MAX_DAILY_LOSS", 50.0)
+    kill_switch: bool = _env_bool("KILL_SWITCH", False)
+    kill_switch_file: str = os.getenv("KILL_SWITCH_FILE", "/tmp/kalshi-kill-switch")
+    paper_slippage_cents: float = _env_float("PAPER_SLIPPAGE_CENTS", 1.0)
+    paper_state_path: str = os.getenv("PAPER_STATE_PATH", "./paper_state.json")
+    position_state_path: str = os.getenv("POSITION_STATE_PATH", "./positions.json")
+    alert_min_edge_pct: float = _env_float("ALERT_MIN_EDGE_PCT", 5.0)
+    alert_cooldown_seconds: float = _env_float("ALERT_COOLDOWN_SECONDS", 300.0)
+    telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
+    discord_webhook_url: str = os.getenv("DISCORD_WEBHOOK_URL", "")
+    polymarket_enabled: bool = _env_bool("POLYMARKET_ENABLED", False)
+    polymarket_base_url: str = os.getenv(
+        "POLYMARKET_BASE_URL", "https://gamma-api.polymarket.com"
+    )
+    polymarket_clob_url: str = os.getenv(
+        "POLYMARKET_CLOB_URL", "https://clob.polymarket.com"
+    )
+    polymarket_match_path: str = os.getenv(
+        "POLYMARKET_MATCH_PATH", "./polymarket_map.json"
+    )
+    backtest_snapshot_path: str = os.getenv(
+        "BACKTEST_SNAPSHOT_PATH", "./snapshots.jsonl"
+    )
+    backtest_recording: bool = _env_bool("BACKTEST_RECORDING", False)
 
 
 settings = Settings()

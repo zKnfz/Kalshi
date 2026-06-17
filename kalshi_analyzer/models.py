@@ -247,6 +247,9 @@ class Opportunity:
     rationale: str
     signal_types: list[str] = field(default_factory=list)
     fill_feasible: bool = True
+    fees_per_contract: float = 0.0
+    net_edge: float = 0.0
+    net_edge_pct: float = 0.0
     last_trade_age_seconds: float | None = None
     first_seen: str = field(default_factory=_utc_now_iso)
     age_seconds: float = 0.0
@@ -266,6 +269,7 @@ class Opportunity:
             round(self.entry_price, 4),
             round(self.fair_price, 4),
             round(self.edge_pct, 2),
+            round(self.net_edge_pct, 2),
             round(self.kelly_fraction, 4),
             round(self.suggested_stake, 2),
             round(self.confidence, 3),
@@ -282,6 +286,9 @@ class Opportunity:
             "strategy": self.strategy,
             "signal_types": list(self.signal_types),
             "fill_feasible": self.fill_feasible,
+            "fees_per_contract": round(self.fees_per_contract, 4),
+            "net_edge": round(self.net_edge, 4),
+            "net_edge_pct": round(self.net_edge_pct, 2),
             "entry_price": round(self.entry_price, 4),
             "fair_price": round(self.fair_price, 4),
             "edge": round(self.edge, 4),

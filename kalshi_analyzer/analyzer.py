@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Iterable
 
 from .config import settings, strategy_bankroll_cap
+from .fees import per_contract_fee
 from .models import Event, Market, Opportunity
 
 
@@ -214,14 +215,24 @@ def _build_opportunity(
     if edge_pct < settings.min_edge_pct:
         return None
 
-    ev = edge
-    raw_kelly = kelly_fraction_for_yes(entry_price, fair_price)
+    fee = per_contract_fee(
+        entry_price,
+        ticker=market.ticker,
+        is_taker=settings.assume_taker_fees,
+    )
+    net_edge = edge - fee
+    net_edge_pct = (net_edge / entry_price * 100.0) if entry_price > 0 else 0.0
+    if net_edge_pct < settings.min_net_edge_pct:
+        return None
+
+    ev = net_edge
+    raw_kelly = kelly_fraction_for_yes(entry_price + fee, fair_price)
     kelly_scaled, stake = size_position(strategy, raw_kelly)
 
     confidence = min(1.0, liquidity_confidence(market) + confidence_boost)
 
     arb_bonus = 1.5 if strategy.endswith("arbitrage") else 1.0
-    score = edge * confidence * arb_bonus * (1.0 + math.tanh(edge_pct / 25.0))
+    score = net_edge * confidence * arb_bonus * (1.0 + math.tanh(net_edge_pct / 25.0))
 
     return Opportunity(
         ticker=market.ticker,
@@ -234,6 +245,9 @@ def _build_opportunity(
         fair_price=fair_price,
         edge=edge,
         edge_pct=edge_pct,
+        fees_per_contract=fee,
+        net_edge=net_edge,
+        net_edge_pct=net_edge_pct,
         kelly_fraction=kelly_scaled,
         suggested_stake=stake,
         expected_value=ev,
@@ -263,14 +277,24 @@ def analyze_yes_no_arbitrage(market: Market) -> Opportunity | None:
         return None
 
     profit = 1.0 - total
+    yes_fee = per_contract_fee(yes_ask, market.ticker, settings.assume_taker_fees)
+    no_fee = per_contract_fee(no_ask, market.ticker, settings.assume_taker_fees)
+    pair_fee = yes_fee + no_fee
+    net_profit = profit - pair_fee
+    if net_profit <= 0:
+        return None
+    net_edge_pct = net_profit / total * 100.0
+    if net_edge_pct < settings.min_net_edge_pct:
+        return None
     raw_kelly = 1.0
     kelly_scaled, stake = size_position("yes_no_arbitrage", raw_kelly)
     confidence = min(1.0, liquidity_confidence(market) + 0.3)
-    score = profit * confidence * 2.5
+    score = net_profit * confidence * 2.5
 
     rationale = (
         f"YES ask {yes_ask:.2f} + NO ask {no_ask:.2f} = {total:.3f} < $1.00; "
-        f"buying both sides locks in {profit*100:.1f}¢ per contract pair."
+        f"buying both sides nets {net_profit*100:.1f}¢ per pair after "
+        f"{pair_fee*100:.2f}¢ in fees."
     )
     return Opportunity(
         ticker=market.ticker,
@@ -283,9 +307,12 @@ def analyze_yes_no_arbitrage(market: Market) -> Opportunity | None:
         fair_price=1.0,
         edge=profit,
         edge_pct=profit / total * 100.0,
+        fees_per_contract=pair_fee,
+        net_edge=net_profit,
+        net_edge_pct=net_edge_pct,
         kelly_fraction=kelly_scaled,
         suggested_stake=stake,
-        expected_value=profit,
+        expected_value=net_profit,
         confidence=confidence,
         score=score,
         liquidity=market.liquidity,
@@ -297,7 +324,8 @@ def analyze_yes_no_arbitrage(market: Market) -> Opportunity | None:
         extra={
             "yes_ask": yes_ask,
             "no_ask": no_ask,
-            "guaranteed_profit": profit,
+            "guaranteed_profit_gross": profit,
+            "fees_per_pair": pair_fee,
         },
     )
 

@@ -310,18 +310,18 @@ def _build_demo_events() -> list[Event]:
 
     arb = Event(
         event_ticker="ARB-DEMO",
-        title="Two-leg arbitrage (demo)",
+        title="Two-leg arbitrage (demo, after fees)",
         mutually_exclusive=False,
         markets=[
             mk(
                 "ARB-DEMO-MAIN",
                 "ARB-DEMO",
-                "yes_ask + no_ask < $1",
-                yes_bid=40,
-                yes_ask=44,
-                no_bid=48,
-                no_ask=52,
-                last=42,
+                "yes_ask + no_ask < $1 (net of fees)",
+                yes_bid=34,
+                yes_ask=38,
+                no_bid=46,
+                no_ask=48,
+                last=36,
                 last_trade_age=3.0,
             ),
         ],
