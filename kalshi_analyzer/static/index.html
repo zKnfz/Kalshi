@@ -35,6 +35,14 @@
           <span class="label">Opportunities</span>
           <span id="opp_count" class="value">0</span>
         </div>
+        <div class="stat" id="exec_stat" hidden>
+          <span class="label">Execution</span>
+          <span id="exec_mode" class="value">off</span>
+        </div>
+        <div class="stat" id="paper_stat" hidden>
+          <span class="label">Paper P&amp;L</span>
+          <span id="paper_pnl" class="value">$0.00</span>
+        </div>
         <div class="stat">
           <span class="label">Connection</span>
           <span id="conn" class="value pill">offline</span>
@@ -55,6 +63,7 @@
           Sort by
           <select id="sort">
             <option value="score">Score</option>
+            <option value="net_edge_pct">Net edge %</option>
             <option value="edge_pct">Edge %</option>
             <option value="edge">Edge ($)</option>
             <option value="kelly_fraction">Kelly %</option>

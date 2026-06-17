@@ -14,6 +14,10 @@
     hideInfeasible: document.getElementById('hide_infeasible'),
     strategyFilters: document.getElementById('strategy_filters'),
     toast: document.getElementById('toast'),
+    execStat: document.getElementById('exec_stat'),
+    execMode: document.getElementById('exec_mode'),
+    paperStat: document.getElementById('paper_stat'),
+    paperPnl: document.getElementById('paper_pnl'),
   };
 
   const state = {
@@ -107,7 +111,8 @@
     const q = state.filter.trim().toLowerCase();
     return ops.filter((o) => {
       if (state.hideInfeasible && o.fill_feasible === false) return false;
-      if ((o.edge_pct ?? 0) < state.minEdgePct) return false;
+      const cmp = (o.net_edge_pct !== undefined) ? o.net_edge_pct : o.edge_pct;
+      if ((cmp ?? 0) < state.minEdgePct) return false;
       if (state.activeStrategies.size) {
         const sigSet = new Set(o.signal_types || [o.strategy]);
         let match = false;
@@ -181,20 +186,20 @@
         </div>
         <div class="metrics">
           <div class="metric edge">
-            <div class="k">Edge</div>
-            <div class="v">${fmtPct(o.edge_pct, 1)}</div>
+            <div class="k">Edge / Net</div>
+            <div class="v">${fmtPct(o.edge_pct, 1)} <span style="opacity:0.7;font-size:0.75rem">/ ${fmtPct(o.net_edge_pct || 0, 1)}</span></div>
           </div>
           <div class="metric">
-            <div class="k">Entry</div>
-            <div class="v">${fmtCents(o.entry_price)}</div>
+            <div class="k">Entry · Fee</div>
+            <div class="v">${fmtCents(o.entry_price)} <span style="opacity:0.6;font-size:0.7rem">−${(o.fees_per_contract*100||0).toFixed(2)}¢</span></div>
           </div>
           <div class="metric">
             <div class="k">Fair</div>
             <div class="v">${fmtCents(o.fair_price)}</div>
           </div>
           <div class="metric kelly">
-            <div class="k">Kelly</div>
-            <div class="v">${fmtPct((o.kelly_fraction || 0) * 100, 1)}</div>
+            <div class="k">Kelly · Stake</div>
+            <div class="v">${fmtPct((o.kelly_fraction || 0) * 100, 1)} <span style="opacity:0.7;font-size:0.7rem">${fmtMoney(o.suggested_stake)}</span></div>
           </div>
         </div>
         <div>
@@ -282,6 +287,22 @@
     els.counts.textContent = `${stats.events_scanned || 0} / ${
       stats.markets_scanned || 0
     }`;
+    const exec = stats.execution;
+    if (exec) {
+      els.execStat.hidden = false;
+      const mode = exec.mode || 'off';
+      const ks = exec.kill_switch ? ' (KILL)' : '';
+      els.execMode.textContent = `${mode}${ks}`;
+      els.execMode.style.color = exec.kill_switch ? 'var(--danger)' :
+        mode === 'live' ? 'var(--warn)' : mode === 'paper' ? 'var(--accent)' : 'var(--muted)';
+    }
+    const paper = stats.paper_pnl;
+    if (paper && paper.equity !== undefined) {
+      els.paperStat.hidden = false;
+      const pnl = (paper.realized_pnl || 0) + (paper.unrealized_pnl || 0);
+      els.paperPnl.textContent = `${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`;
+      els.paperPnl.style.color = pnl >= 0 ? 'var(--accent)' : 'var(--danger)';
+    }
 
     let filtered = applyFilters(opsArr);
     filtered = sortOps(filtered);

@@ -73,6 +73,24 @@ The suite is fast (well under a second) and covers:
 
 Add a test for every new signal or scoring change.
 
+## Module map
+
+| File | Purpose |
+|---|---|
+| `analyzer.py` | Pure scoring / signal logic (no I/O). |
+| `fees.py` | Official Kalshi fee model. |
+| `auth.py` | RSA-PSS request signing. |
+| `client.py` | Async REST client with backoff. |
+| `ws_client.py` | Native WebSocket client (auth required). |
+| `polymarket.py` | Gamma client + cross-platform arb. |
+| `paper.py` | Paper-trading engine (persisted ledger). |
+| `execution.py` | Order router with circuit breakers. |
+| `alerts.py` | Telegram + Discord webhook notifier. |
+| `backtest.py` | JSONL snapshot recorder + replay. |
+| `cli.py` | `python -m kalshi_analyzer.cli ...`. |
+| `engine.py` | Glues everything together; the only stateful place. |
+| `server.py` | FastAPI + dashboard. |
+
 ## Adding a new signal
 
 1. Implement an `analyze_<your_signal>(market_or_event)` function in
