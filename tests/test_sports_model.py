@@ -18,13 +18,46 @@ from kalshi_analyzer.sports_feed import (
     match_game_to_kalshi,
     normalize_espn_scoreboard,
 )
+from kalshi_analyzer.sports_catalog import LEAGUE_CONFIGS, sport_key_for_ticker
 from kalshi_analyzer.sports_model import (
     SportsModelEngine,
-    SportsPrediction,
     dixon_coles_home_win_prob,
     predict_game,
+    tennis_win_prob,
 )
+from kalshi_analyzer.sports_types import SportsPrediction
 
+
+MOCK_ESPN_TENNIS_MATCH = {
+    "id": "match-123",
+    "competitors": [
+        {
+            "homeAway": "away",
+            "athlete": {"displayName": "Daniel Altmaier"},
+            "linescores": [{"value": "4"}, {"value": "3"}, {"value": "2"}],
+        },
+        {
+            "homeAway": "home",
+            "athlete": {"displayName": "Hubert Hurkacz"},
+            "linescores": [{"value": "6"}, {"value": "6"}, {"value": "1"}],
+        },
+    ],
+    "status": {
+        "period": 3,
+        "type": {"state": "in", "shortDetail": "3rd", "completed": False},
+    },
+}
+
+MOCK_ESPN_TENNIS_EVENT = {
+    "id": "27-2026",
+    "shortName": "Terra Wortmann Open",
+    "groupings": [
+        {
+            "grouping": {"displayName": "Men's Singles"},
+            "competitions": [MOCK_ESPN_TENNIS_MATCH],
+        }
+    ],
+}
 
 MOCK_ESPN_EVENT = {
     "id": "401547689",
@@ -93,6 +126,20 @@ def test_dixon_coles_score_deficit_shifts_toward_trailing_team():
     p_home_leading = dixon_coles_home_win_prob(1, 0, period=1, minutes_left=45.0)
     assert p_home_trailing < p_even
     assert p_home_leading > p_even
+
+
+def test_espn_tennis_groupings_normalize_live_matches():
+    games = normalize_espn_scoreboard(
+        {"events": [MOCK_ESPN_TENNIS_EVENT]}, sport="tennis", league="atp"
+    )
+    assert len(games) == 1
+    g = games[0]
+    assert g.is_live is True
+    assert g.away_team == "Daniel Altmaier"
+    assert g.home_team == "Hubert Hurkacz"
+    assert g.home_score == 2  # sets won
+    assert g.away_score == 1
+    assert g.tournament == "Terra Wortmann Open"
 
 
 def test_espn_payload_normalization():
@@ -239,3 +286,32 @@ def test_manual_match_map_overrides_fuzzy_match(tmp_path, monkeypatch):
     assert ticker == "KXNFL-MANUAL-LEG"
     assert market is not None
     assert market.ticker == "KXNFL-MANUAL-LEG"
+
+
+def test_tennis_set_lead_increases_win_probability():
+    p_even = tennis_win_prob(1, 1)
+    p_home_lead = tennis_win_prob(2, 1)
+    p_home_trail = tennis_win_prob(1, 2)
+    assert p_home_lead > p_even
+    assert p_home_trail < p_even
+
+
+def test_sport_key_detects_tennis_and_esports():
+    assert sport_key_for_ticker("KXATP-2026-FINAL", "KXATP-2026") == "tennis"
+    assert sport_key_for_ticker("KXCS2-MAJOR", "KXCS2") == "esports"
+
+
+def test_league_catalog_includes_tennis_and_college():
+    leagues = {c.espn_league for c in LEAGUE_CONFIGS}
+    assert "atp" in leagues and "wta" in leagues
+    assert "college-football" in leagues
+    assert "mens-college-basketball" in leagues
+
+
+def test_app_imports_without_numpy():
+    import importlib
+
+    import kalshi_analyzer.server as srv
+
+    importlib.reload(srv)
+    assert srv.app.title == "Kalshi Edge Analyzer"

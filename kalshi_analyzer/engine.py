@@ -6,7 +6,7 @@ import random
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from .analyzer import evaluate_markets, evaluate_sports_prediction, group_baskets
+from .analyzer import evaluate_markets, group_baskets
 from .auth import load_auth_from_settings
 from .backtest import append_snapshot
 from .client import KalshiClient
@@ -20,7 +20,6 @@ from .polymarket import (
     load_manual_match_map,
 )
 from .ws_client import KalshiWebSocket
-from .sports_model import SportsModelEngine
 
 log = logging.getLogger(__name__)
 
@@ -96,9 +95,14 @@ class AnalyzerEngine:
         self._poly_match_map = load_manual_match_map()
         if settings.polymarket_enabled:
             self._poly_client = PolymarketClient()
-        self._sports_engine: SportsModelEngine | None = None
-        if settings.sports_model_enabled:
-            self._sports_engine = SportsModelEngine()
+        self._sports_engine = None
+        if settings.sports_model_enabled or settings.sports_enabled:
+            try:
+                from .sports_model import SportsModelEngine
+
+                self._sports_engine = SportsModelEngine()
+            except ImportError as exc:
+                log.warning("Sports feed unavailable: %s", exc)
         self._poly_markets_cache: list = []
         self._poly_last_fetch: float = 0.0
         self._ws: KalshiWebSocket | None = None
@@ -201,20 +205,24 @@ class AnalyzerEngine:
 
         if self._sports_engine is not None:
             try:
-                predictions = await self._sports_engine.get_predictions(events)
-                sports_ops = [
-                    op
-                    for p in predictions
-                    if (op := evaluate_sports_prediction(p)) is not None
-                ]
-                if sports_ops:
-                    opportunities = sorted(
-                        [*opportunities, *sports_ops],
-                        key=lambda o: o.score,
-                        reverse=True,
-                    )
+                await self._sports_engine.get_predictions(events)
+                if settings.sports_model_enabled:
+                    from .analyzer import evaluate_sports_prediction
+
+                    predictions = self._sports_engine.predictions
+                    sports_ops = [
+                        op
+                        for p in predictions
+                        if (op := evaluate_sports_prediction(p)) is not None
+                    ]
+                    if sports_ops:
+                        opportunities = sorted(
+                            [*opportunities, *sports_ops],
+                            key=lambda o: o.score,
+                            reverse=True,
+                        )
             except Exception as exc:
-                log.warning("Sports model scan failed: %s", exc)
+                log.warning("Sports feed scan failed: %s", exc)
 
         opportunities = opportunities[: max(50, settings.max_markets)]
 

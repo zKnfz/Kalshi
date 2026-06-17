@@ -6,13 +6,15 @@ from datetime import datetime, timezone
 from typing import Iterable
 
 from .config import settings
+from .sports_catalog import DEFAULT_KALSHI_SPORTS_PREFIXES, sport_key_for_ticker
 
 
 def sports_prefixes() -> tuple[str, ...]:
     raw = settings.sports_prefixes
     if isinstance(raw, str):
         return tuple(p.strip().upper() for p in raw.split(",") if p.strip())
-    return tuple(str(p).upper() for p in raw)
+    out = tuple(str(p).upper() for p in raw)
+    return out if out else DEFAULT_KALSHI_SPORTS_PREFIXES
 
 
 def is_sports_market(ticker: str, event_ticker: str = "") -> bool:
@@ -20,15 +22,22 @@ def is_sports_market(ticker: str, event_ticker: str = "") -> bool:
         return False
     t = (ticker or "").upper()
     e = (event_ticker or "").upper()
+    combined = f"{t} {e}"
     for prefix in sports_prefixes():
+        p = prefix.upper()
         if (
-            t.startswith(f"{prefix}-")
-            or t.startswith(prefix)
-            or e.startswith(f"{prefix}-")
-            or e.startswith(prefix)
+            t.startswith(f"{p}-")
+            or t.startswith(p)
+            or e.startswith(f"{p}-")
+            or e.startswith(p)
+            or p in combined
         ):
             return True
     return False
+
+
+def sport_key(ticker: str, event_ticker: str = "") -> str | None:
+    return sport_key_for_ticker(ticker, event_ticker)
 
 
 def series_ticker_for(ticker: str, event_ticker: str = "") -> str:

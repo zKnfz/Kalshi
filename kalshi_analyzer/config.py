@@ -124,7 +124,14 @@ class Settings:
     sports_prefixes: tuple[str, ...] = field(
         default_factory=lambda: _env_csv_strs(
             "SPORTS_PREFIXES",
-            ("NFL", "NBA", "MLB", "NHL", "CFB", "SOC", "GOLF", "TEN", "MMA"),
+            (
+                "KXNBA", "KXNBAGAME", "NBA", "KXNFL", "KXNFLGAME", "NFL",
+                "KXMLB", "KXMLBGAME", "MLB", "KXNHL", "KXNHLGAME", "NHL",
+                "KXCFB", "CFB", "KXCBB", "KXNCAAB", "CBB", "NCAA",
+                "KXWC", "KXMLS", "KXEPL", "SOC", "KXTEN", "KXATP", "KXWTA",
+                "TEN", "ATP", "WTA", "KXGOLF", "KXPGA", "GOLF", "KXMMA",
+                "KXUFC", "MMA", "KXWNBA", "WNBA", "KXCS2", "KXVAL", "KXLOL",
+            ),
         )
     )
     sports_only_mode: bool = _env_bool("SPORTS_ONLY_MODE", False)

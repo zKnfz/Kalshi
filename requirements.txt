@@ -5,5 +5,4 @@ pydantic>=2.7.0
 python-dotenv>=1.0.1
 cryptography>=42.0.0
 websockets>=12.0
-numpy>=1.26.0
-scipy>=1.11.0
+# Optional — sports_model.py uses pure Python; numpy/scipy not required at runtime

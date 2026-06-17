@@ -1,7 +1,7 @@
 """Statistical in-play sports models — no ML training required.
 
-Provides Dixon-Coles Poisson (soccer), logistic win-probability tables
-(NBA/NFL), and a simplified run-expectancy matrix (MLB).
+Pure-Python implementation (no numpy/scipy import at load time) so the app
+starts without optional scientific deps. Enable via ``SPORTS_MODEL_ENABLED``.
 """
 
 from __future__ import annotations
@@ -9,11 +9,7 @@ from __future__ import annotations
 import logging
 import math
 import time
-from dataclasses import dataclass, field
 from typing import Any
-
-import numpy as np
-from scipy.stats import poisson
 
 from .config import settings
 from .models import Event, Market
@@ -23,6 +19,7 @@ from .sports_feed import (
     load_sports_match_map,
     match_game_to_kalshi,
 )
+from .sports_types import SportsPrediction
 
 log = logging.getLogger(__name__)
 
@@ -30,61 +27,66 @@ HOME_ADVANTAGE = 0.08
 DEFAULT_XG_PER_HALF = 1.35
 DIXON_COLES_RHO = -0.13
 
-
-@dataclass
-class SportsPrediction:
-    kalshi_ticker: str
-    sport: str
-    home_team: str
-    away_team: str
-    model_yes_prob: float
-    kalshi_yes_ask: float
-    edge_pct: float
-    confidence: float
-    game_state: dict[str, Any] = field(default_factory=dict)
-    market: Market | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "kalshi_ticker": self.kalshi_ticker,
-            "sport": self.sport,
-            "home_team": self.home_team,
-            "away_team": self.away_team,
-            "model_yes_prob": round(self.model_yes_prob, 4),
-            "kalshi_yes_ask": round(self.kalshi_yes_ask, 4),
-            "edge_pct": round(self.edge_pct, 2),
-            "confidence": round(self.confidence, 3),
-            "game_state": self.game_state,
-        }
+_NBA_COEF = [
+    [-4.2, -3.5, -2.8, -2.2, -1.6],
+    [-3.0, -2.5, -2.0, -1.5, -1.1],
+    [-1.8, -1.4, -1.0, -0.7, -0.5],
+    [0.0, 0.0, 0.0, 0.0, 0.0],
+    [1.8, 1.4, 1.0, 0.7, 0.5],
+    [3.0, 2.5, 2.0, 1.5, 1.1],
+    [4.2, 3.5, 2.8, 2.2, 1.6],
+]
+_NFL_COEF = [
+    [-3.8, -3.0, -2.3, -1.7, -1.2],
+    [-2.6, -2.0, -1.5, -1.1, -0.8],
+    [-1.5, -1.1, -0.8, -0.6, -0.4],
+    [0.0, 0.0, 0.0, 0.0, 0.0],
+    [1.5, 1.1, 0.8, 0.6, 0.4],
+    [2.6, 2.0, 1.5, 1.1, 0.8],
+    [3.8, 3.0, 2.3, 1.7, 1.2],
+]
+_MLB_RE = [
+    [0.46, 0.72, 1.04, 1.35, 1.15, 1.45, 1.82, 2.10],
+    [0.24, 0.45, 0.62, 0.88, 0.52, 0.75, 0.98, 1.20],
+    [0.10, 0.20, 0.28, 0.41, 0.22, 0.35, 0.48, 0.60],
+]
 
 
 def _clamp(p: float, lo: float = 0.01, hi: float = 0.99) -> float:
     return max(lo, min(hi, p))
 
 
-def _minutes_remaining(game: LiveGame) -> float:
-    """Rough minutes left from period + clock."""
+def _poisson_pmf(k: int, lam: float) -> float:
+    if lam <= 0:
+        return 1.0 if k == 0 else 0.0
+    return math.exp(-lam) * (lam**k) / math.factorial(k)
 
-    if game.league in {"nba", "nhl"}:
-        period_len = 12 if game.league == "nba" else 20
+
+def _minutes_remaining(game: LiveGame) -> float:
+    if game.league in {"nba", "wnba", "mens-college-basketball", "womens-college-basketball"}:
+        period_len = 12 if game.league != "mens-college-basketball" else 20
         periods = 4
         remaining_periods = max(0, periods - max(0, game.period - 1))
-        clock_m = 0.0
+        clock_m = period_len
         if game.clock and ":" in game.clock:
             try:
                 mm, ss = game.clock.split(":", 1)
                 clock_m = int(mm) + int(ss) / 60.0
             except ValueError:
-                clock_m = period_len
-        elif game.clock:
-            try:
-                clock_m = float(game.clock)
-            except ValueError:
-                clock_m = period_len
-        else:
-            clock_m = period_len
+                pass
         return remaining_periods * period_len + clock_m
-    if game.league == "nfl":
+    if game.league == "nhl":
+        period_len = 20
+        remaining_periods = max(0, 3 - max(0, game.period - 1))
+        clock_m = period_len
+        if game.clock and ":" in game.clock:
+            try:
+                mm, ss = game.clock.split(":", 1)
+                clock_m = int(mm) + int(ss) / 60.0
+            except ValueError:
+                pass
+        return remaining_periods * period_len + clock_m
+    if game.league in {"nfl", "college-football"}:
         period_len = 15
         remaining_periods = max(0, 4 - max(0, game.period - 1))
         clock_m = period_len
@@ -97,8 +99,10 @@ def _minutes_remaining(game: LiveGame) -> float:
         return remaining_periods * period_len + clock_m
     if game.league == "mlb":
         return max(1.0, (9 - min(game.period, 9)) * 3.0)
-    if game.league == "fifa.world":
+    if game.league in {"fifa.world", "usa.1", "eng.1", "uefa.champions"}:
         return max(5.0, (2 - min(game.period, 2)) * 45.0)
+    if game.league in {"atp", "wta"}:
+        return max(10.0, (3 - min(game.period, 3)) * 45.0)
     return 30.0
 
 
@@ -112,10 +116,8 @@ def dixon_coles_home_win_prob(
     away_xg: float = DEFAULT_XG_PER_HALF,
     home_elo_adv: float = HOME_ADVANTAGE,
 ) -> float:
-    """P(home wins) from current score + remaining Poisson xG (Dixon-Coles style)."""
-
     if minutes_left is None:
-        minutes_left = 45.0 if period <= 1 else 45.0
+        minutes_left = 45.0
     frac = _clamp(minutes_left / 90.0, 0.05, 1.0)
     lam_h = home_xg * frac * (1.0 + home_elo_adv)
     lam_a = away_xg * frac
@@ -125,8 +127,8 @@ def dixon_coles_home_win_prob(
     p_away = 0.0
     for add_h in range(max_goals + 1):
         for add_a in range(max_goals + 1):
-            ph = poisson.pmf(add_h, lam_h)
-            pa = poisson.pmf(add_a, lam_a)
+            ph = _poisson_pmf(add_h, lam_h)
+            pa = _poisson_pmf(add_a, lam_a)
             if add_h == 0 and add_a == 0:
                 tau = 1.0 - DIXON_COLES_RHO * math.sqrt(lam_h * lam_a) / (lam_h + lam_a + 1e-9)
             else:
@@ -144,37 +146,8 @@ def dixon_coles_home_win_prob(
     return _clamp(p_home / denom)
 
 
-# Logistic win-probability lookup: score_diff -> coefficient per minute remaining bucket
-_NBA_COEF = np.array(
-    [
-        # diff -3..+3 for buckets: <6min, 6-12, 12-24, 24-36, 36+ min
-        [-4.2, -3.5, -2.8, -2.2, -1.6],  # diff -3
-        [-3.0, -2.5, -2.0, -1.5, -1.1],  # -2
-        [-1.8, -1.4, -1.0, -0.7, -0.5],  # -1
-        [0.0, 0.0, 0.0, 0.0, 0.0],       # 0
-        [1.8, 1.4, 1.0, 0.7, 0.5],       # +1
-        [3.0, 2.5, 2.0, 1.5, 1.1],       # +2
-        [4.2, 3.5, 2.8, 2.2, 1.6],       # +3
-    ]
-)
-_NFL_COEF = np.array(
-    [
-        [-3.8, -3.0, -2.3, -1.7, -1.2],
-        [-2.6, -2.0, -1.5, -1.1, -0.8],
-        [-1.5, -1.1, -0.8, -0.6, -0.4],
-        [0.0, 0.0, 0.0, 0.0, 0.0],
-        [1.5, 1.1, 0.8, 0.6, 0.4],
-        [2.6, 2.0, 1.5, 1.1, 0.8],
-        [3.8, 3.0, 2.3, 1.7, 1.2],
-    ]
-)
-
-
 def _bucket_index(minutes_left: float, sport: str) -> int:
-    if sport == "nba":
-        edges = (6, 12, 24, 36)
-    else:
-        edges = (5, 10, 20, 30)
+    edges = (6, 12, 24, 36) if sport == "nba" else (5, 10, 20, 30)
     for i, edge in enumerate(edges):
         if minutes_left < edge:
             return i
@@ -188,18 +161,14 @@ def win_prob_table(
     sport: str = "nba",
     has_possession: bool = False,
 ) -> float:
-    """Leading team win probability from precomputed logistic coefficients."""
-
     diff = max(-3, min(3, score_diff))
     idx = diff + 3
     bucket = _bucket_index(minutes_left, sport)
     table = _NBA_COEF if sport == "nba" else _NFL_COEF
-    coef = float(table[idx, bucket])
+    coef = table[idx][bucket]
     if has_possession and abs(score_diff) <= 1:
         coef += 0.15 if score_diff >= 0 else -0.15
-    # Convert to P(leading/home team wins) — positive diff favors home
-    p = 1.0 / (1.0 + math.exp(-coef))
-    return _clamp(p)
+    return _clamp(1.0 / (1.0 + math.exp(-coef)))
 
 
 def mlb_run_expectancy_win_prob(
@@ -208,29 +177,39 @@ def mlb_run_expectancy_win_prob(
     bases: int,
     score_diff: int,
 ) -> float:
-    """Simplified RE24-style home win probability."""
-
-    # Base run expectancy by outs (0-2) and base state (0=empty..7=loaded)
-    re_table = np.array(
-        [
-            [0.46, 0.72, 1.04, 1.35, 1.15, 1.45, 1.82, 2.10],  # 0 outs
-            [0.24, 0.45, 0.62, 0.88, 0.52, 0.75, 0.98, 1.20],  # 1 out
-            [0.10, 0.20, 0.28, 0.41, 0.22, 0.35, 0.48, 0.60],  # 2 outs
-        ]
-    )
     outs_i = max(0, min(2, outs))
     bases_i = max(0, min(7, bases))
-    re = float(re_table[outs_i, bases_i])
-    innings_left = max(0.5, (9 - min(inning, 9)) + (0.0 if inning <= 9 else 0.0))
+    re = _MLB_RE[outs_i][bases_i]
+    innings_left = max(0.5, 9 - min(inning, 9))
     exp_runs = re * innings_left / 3.0
     adj_diff = score_diff + exp_runs * 0.35
-    p = 1.0 / (1.0 + math.exp(-adj_diff * 0.85))
-    return _clamp(p)
+    return _clamp(1.0 / (1.0 + math.exp(-adj_diff * 0.85)))
+
+
+def tennis_win_prob(
+    home_sets: int,
+    away_sets: int,
+    *,
+    home_games: int = 0,
+    away_games: int = 0,
+) -> float:
+    """P(home wins match) from sets/games — logistic on set deficit."""
+
+    set_diff = home_sets - away_sets
+    game_diff = home_games - away_games
+    coef = set_diff * 1.35 + game_diff * 0.08
+    return _clamp(1.0 / (1.0 + math.exp(-coef)))
 
 
 def _infer_yes_is_home(market: Market, game: LiveGame) -> bool:
     title = (market.title or "").lower()
-    return _normalize_team(game.home_team) in _normalize_team(title) or "home" in title
+    home_token = _normalize_team(game.home_team)
+    away_token = _normalize_team(game.away_team)
+    if home_token and home_token in title:
+        return True
+    if away_token and away_token in title:
+        return False
+    return "home" in title or game.home_team.lower() in title
 
 
 def _normalize_team(name: str) -> str:
@@ -243,8 +222,6 @@ def predict_game(
     *,
     now: float | None = None,
 ) -> SportsPrediction | None:
-    """Compute model YES probability for a matched live game."""
-
     yes_ask = market.yes_ask
     if yes_ask is None or yes_ask <= 0:
         return None
@@ -253,43 +230,38 @@ def predict_game(
     minutes_left = _minutes_remaining(game)
     yes_is_home = _infer_yes_is_home(market, game)
 
-    if game.league == "fifa.world" or game.sport == "soccer":
+    soccer_leagues = {"fifa.world", "usa.1", "eng.1", "uefa.champions"}
+    basketball_leagues = {"nba", "wnba", "mens-college-basketball", "womens-college-basketball"}
+
+    if game.sport == "soccer" or game.league in soccer_leagues:
         p_home = dixon_coles_home_win_prob(
-            game.home_score,
-            game.away_score,
-            period=game.period,
-            minutes_left=minutes_left,
+            game.home_score, game.away_score, period=game.period, minutes_left=minutes_left
         )
         model_yes = p_home if yes_is_home else (1.0 - p_home)
     elif game.league == "mlb":
-        outs = 0
-        bases = 0
         sit = game.raw.get("competitions", [{}])[0].get("situation") or {}
         outs = int(sit.get("outs") or 0)
         on_base = sit.get("onBase") or []
         bases = min(7, len(on_base))
-        p_home = mlb_run_expectancy_win_prob(
-            max(1, game.period), outs, bases, score_diff
-        )
+        p_home = mlb_run_expectancy_win_prob(max(1, game.period), outs, bases, score_diff)
         model_yes = p_home if yes_is_home else (1.0 - p_home)
-    elif game.league == "nba":
-        poss = game.possession and _normalize_team(game.possession) == _normalize_team(
-            game.home_team
-        )
-        p_home = win_prob_table(
-            score_diff, minutes_left, sport="nba", has_possession=poss
-        )
+    elif game.league in basketball_leagues:
+        poss = game.possession and _normalize_team(game.possession) == _normalize_team(game.home_team)
+        p_home = win_prob_table(score_diff, minutes_left, sport="nba", has_possession=bool(poss))
         model_yes = p_home if yes_is_home else (1.0 - p_home)
-    elif game.league == "nfl":
-        poss = game.possession and _normalize_team(game.possession) == _normalize_team(
-            game.home_team
-        )
-        p_home = win_prob_table(
-            score_diff, minutes_left, sport="nfl", has_possession=poss
-        )
+    elif game.league in {"nfl", "college-football"}:
+        poss = game.possession and _normalize_team(game.possession) == _normalize_team(game.home_team)
+        p_home = win_prob_table(score_diff, minutes_left, sport="nfl", has_possession=bool(poss))
+        model_yes = p_home if yes_is_home else (1.0 - p_home)
+    elif game.league in {"atp", "wta"} or game.sport == "tennis":
+        home_sets = int(game.raw.get("_home_sets") or game.home_score or 0)
+        away_sets = int(game.raw.get("_away_sets") or game.away_score or 0)
+        p_home = tennis_win_prob(home_sets, away_sets)
+        model_yes = p_home if yes_is_home else (1.0 - p_home)
+    elif game.league == "nhl":
+        p_home = win_prob_table(score_diff, minutes_left, sport="nba")
         model_yes = p_home if yes_is_home else (1.0 - p_home)
     else:
-        # MMA / fallback — score-based logistic
         p_home = 1.0 / (1.0 + math.exp(-score_diff * 1.2))
         model_yes = p_home if yes_is_home else (1.0 - p_home)
 
@@ -301,7 +273,11 @@ def predict_game(
     now = now or time.time()
     age = max(0.0, now - game.last_update)
     freshness = math.exp(-age / max(settings.stale_last_age_seconds, 1))
-    fit = 0.85 if game.league in {"nba", "nfl", "mlb", "fifa.world"} else 0.65
+    high_fit = {
+        "nba", "nfl", "mlb", "fifa.world", "atp", "wta",
+        "college-football", "mens-college-basketball",
+    }
+    fit = 0.85 if game.league in high_fit else 0.65
     confidence = _clamp(freshness * fit, 0.0, 1.0)
 
     return SportsPrediction(
@@ -329,10 +305,15 @@ class SportsModelEngine:
         self._espn = espn or ESPNClient()
         self._match_map = match_map if match_map is not None else load_sports_match_map()
         self._predictions: list[SportsPrediction] = []
+        self._live_feed: list[dict[str, Any]] = []
 
     @property
     def predictions(self) -> list[SportsPrediction]:
         return list(self._predictions)
+
+    @property
+    def live_feed(self) -> list[dict[str, Any]]:
+        return list(self._live_feed)
 
     async def close(self) -> None:
         await self._espn.close()
@@ -343,7 +324,7 @@ class SportsModelEngine:
         *,
         now: float | None = None,
     ) -> list[SportsPrediction]:
-        if not settings.sports_model_enabled:
+        if not settings.sports_model_enabled and not settings.sports_enabled:
             return []
 
         try:
@@ -353,12 +334,44 @@ class SportsModelEngine:
             return list(self._predictions)
 
         live = [g for g in games if g.is_live]
+        now = now or time.time()
+        feed: list[dict[str, Any]] = []
+
+        for game in live:
+            market, ticker = match_game_to_kalshi(
+                game, kalshi_events, manual_map=self._match_map
+            )
+            row: dict[str, Any] = {
+                "sport": game.league,
+                "home_team": game.home_team,
+                "away_team": game.away_team,
+                "kalshi_ticker": ticker or None,
+                "kalshi_matched": market is not None,
+                "game_state": game.to_game_state(),
+                "model_yes_prob": None,
+                "kalshi_yes_ask": None,
+                "edge_pct": None,
+                "confidence": None,
+            }
+            if market is not None and market.yes_ask:
+                row["kalshi_yes_ask"] = market.yes_ask / 100.0
+            if market is not None:
+                pred = predict_game(game, market, now=now)
+                if pred is not None:
+                    row.update(pred.to_dict())
+            feed.append(row)
+
+        self._live_feed = feed
+
+        if not settings.sports_model_enabled:
+            self._predictions = []
+            return []
+
         if not live:
             self._predictions = []
             return []
 
         out: list[SportsPrediction] = []
-        now = now or time.time()
         for game in live:
             market, _ = match_game_to_kalshi(
                 game, kalshi_events, manual_map=self._match_map
@@ -378,4 +391,8 @@ class SportsModelEngine:
         return out
 
     def live_snapshot(self) -> list[dict[str, Any]]:
+        """All live ESPN games for the dashboard sidebar (matched or not)."""
+
+        if self._live_feed:
+            return self._live_feed
         return [p.to_dict() for p in self._predictions]

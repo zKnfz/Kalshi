@@ -52,15 +52,17 @@
   };
 
   function sportIcon(o) {
-    const src = (o.series_ticker || o.ticker || o.extra?.sport || '').toUpperCase();
-    if (src.includes('NBA') || src.includes('KXNBA')) return '🏀';
-    if (src.includes('NFL') || src.includes('KXNFL') || src.includes('CFB')) return '🏈';
+    const src = (o.series_ticker || o.ticker || o.extra?.sport || o.sport || '').toUpperCase();
+    if (src.includes('TEN') || src.includes('ATP') || src.includes('WTA') || src.includes('KXTEN')) return '🎾';
+    if (src.includes('NBA') || src.includes('WNBA') || src.includes('CBB') || src.includes('NCAA')) return '🏀';
+    if (src.includes('NFL') || src.includes('CFB') || src.includes('KXNFL')) return '🏈';
     if (src.includes('MLB') || src.includes('KXMLB')) return '⚾';
     if (src.includes('NHL') || src.includes('KXNHL')) return '🏒';
     if (src.includes('MMA') || src.includes('UFC') || src.includes('KXMMA')) return '🥊';
-    if (src.includes('SOC') || src.includes('WC') || src.includes('FIFA') || src.includes('KXWC')) return '⚽';
-    if (src.includes('GOLF')) return '⛳';
-    if (src.includes('TEN')) return '🎾';
+    if (src.includes('GOLF') || src.includes('PGA') || src.includes('LPGA')) return '⛳';
+    if (src.includes('SOC') || src.includes('MLS') || src.includes('EPL') || src.includes('WC') || src.includes('FIFA') || src.includes('UCL')) return '⚽';
+    if (src.includes('CS2') || src.includes('VAL') || src.includes('LOL') || src.includes('DOTA') || src.includes('ESPORT')) return '🎮';
+    if (src.includes('F1') || src.includes('RACING')) return '🏎';
     if (o.is_sports) return '🏟';
     return '';
   }
@@ -401,20 +403,29 @@
     const kalshiPct = (g.kalshi_yes_ask ?? 0) * 100;
     const edge = g.edge_pct ?? 0;
     const icon = sportIcon({ series_ticker: g.sport, ticker: g.kalshi_ticker, is_sports: true });
-    return `
-      <div class="sports-live-card">
-        <div class="teams">${icon} ${g.away_team || '?'} @ ${g.home_team || '?'}</div>
-        <div class="scoreline">${g.away_team}: ${gs.away_score ?? 0} · ${g.home_team}: ${gs.home_score ?? 0} · ${gs.clock || ''} P${gs.period || '?'}</div>
-        ${gs.is_live ? '<span class="badge-warn badge-live">🔴 LIVE</span>' : ''}
-        <div class="prob-bar-wrap">
+    const tournament = gs.tournament ? `<div class="scoreline">${gs.tournament}</div>` : '';
+    const kalshiLink = g.kalshi_ticker
+      ? `<a href="https://kalshi.com/markets/${encodeURIComponent(g.kalshi_ticker)}" target="_blank" rel="noreferrer">Open on Kalshi ↗</a>`
+      : `<span class="scoreline">No Kalshi market matched</span>`;
+    const probBlock =
+      g.model_yes_prob != null
+        ? `<div class="prob-bar-wrap">
           <div class="prob-bar-labels"><span>Model ${modelPct.toFixed(0)}%</span><span>Kalshi ${kalshiPct.toFixed(0)}%</span></div>
           <div class="prob-bar">
             <span class="model" style="width:${Math.min(100, modelPct)}%"></span>
             <span class="kalshi" style="left:${Math.min(100, kalshiPct)}%"></span>
           </div>
         </div>
-        <div class="model-edge-row">Edge: ${edge.toFixed(1)}%</div>
-        <a href="https://kalshi.com/markets/${encodeURIComponent(g.kalshi_ticker || '')}" target="_blank" rel="noreferrer">Open on Kalshi ↗</a>
+        <div class="model-edge-row">Edge: ${edge.toFixed(1)}%</div>`
+        : '';
+    return `
+      <div class="sports-live-card">
+        <div class="teams">${icon} ${g.away_team || gs.away_team || '?'} @ ${g.home_team || gs.home_team || '?'}</div>
+        ${tournament}
+        <div class="scoreline">Sets ${gs.away_score ?? 0}–${gs.home_score ?? 0} · ${gs.clock || gs.situation || ''}</div>
+        ${gs.is_live ? '<span class="badge-warn badge-live">🔴 LIVE</span>' : ''}
+        ${probBlock}
+        ${kalshiLink}
       </div>
     `;
   }
