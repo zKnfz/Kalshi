@@ -305,10 +305,15 @@ class SportsModelEngine:
         self._espn = espn or ESPNClient()
         self._match_map = match_map if match_map is not None else load_sports_match_map()
         self._predictions: list[SportsPrediction] = []
+        self._live_feed: list[dict[str, Any]] = []
 
     @property
     def predictions(self) -> list[SportsPrediction]:
         return list(self._predictions)
+
+    @property
+    def live_feed(self) -> list[dict[str, Any]]:
+        return list(self._live_feed)
 
     async def close(self) -> None:
         await self._espn.close()
@@ -319,7 +324,7 @@ class SportsModelEngine:
         *,
         now: float | None = None,
     ) -> list[SportsPrediction]:
-        if not settings.sports_model_enabled:
+        if not settings.sports_model_enabled and not settings.sports_enabled:
             return []
 
         try:
@@ -329,12 +334,44 @@ class SportsModelEngine:
             return list(self._predictions)
 
         live = [g for g in games if g.is_live]
+        now = now or time.time()
+        feed: list[dict[str, Any]] = []
+
+        for game in live:
+            market, ticker = match_game_to_kalshi(
+                game, kalshi_events, manual_map=self._match_map
+            )
+            row: dict[str, Any] = {
+                "sport": game.league,
+                "home_team": game.home_team,
+                "away_team": game.away_team,
+                "kalshi_ticker": ticker or None,
+                "kalshi_matched": market is not None,
+                "game_state": game.to_game_state(),
+                "model_yes_prob": None,
+                "kalshi_yes_ask": None,
+                "edge_pct": None,
+                "confidence": None,
+            }
+            if market is not None and market.yes_ask:
+                row["kalshi_yes_ask"] = market.yes_ask / 100.0
+            if market is not None:
+                pred = predict_game(game, market, now=now)
+                if pred is not None:
+                    row.update(pred.to_dict())
+            feed.append(row)
+
+        self._live_feed = feed
+
+        if not settings.sports_model_enabled:
+            self._predictions = []
+            return []
+
         if not live:
             self._predictions = []
             return []
 
         out: list[SportsPrediction] = []
-        now = now or time.time()
         for game in live:
             market, _ = match_game_to_kalshi(
                 game, kalshi_events, manual_map=self._match_map
@@ -354,4 +391,8 @@ class SportsModelEngine:
         return out
 
     def live_snapshot(self) -> list[dict[str, Any]]:
+        """All live ESPN games for the dashboard sidebar (matched or not)."""
+
+        if self._live_feed:
+            return self._live_feed
         return [p.to_dict() for p in self._predictions]

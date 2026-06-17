@@ -96,13 +96,13 @@ class AnalyzerEngine:
         if settings.polymarket_enabled:
             self._poly_client = PolymarketClient()
         self._sports_engine = None
-        if settings.sports_model_enabled:
+        if settings.sports_model_enabled or settings.sports_enabled:
             try:
                 from .sports_model import SportsModelEngine
 
                 self._sports_engine = SportsModelEngine()
             except ImportError as exc:
-                log.warning("Sports model unavailable (install deps): %s", exc)
+                log.warning("Sports feed unavailable: %s", exc)
         self._poly_markets_cache: list = []
         self._poly_last_fetch: float = 0.0
         self._ws: KalshiWebSocket | None = None
@@ -205,22 +205,24 @@ class AnalyzerEngine:
 
         if self._sports_engine is not None:
             try:
-                from .analyzer import evaluate_sports_prediction
+                await self._sports_engine.get_predictions(events)
+                if settings.sports_model_enabled:
+                    from .analyzer import evaluate_sports_prediction
 
-                predictions = await self._sports_engine.get_predictions(events)
-                sports_ops = [
-                    op
-                    for p in predictions
-                    if (op := evaluate_sports_prediction(p)) is not None
-                ]
-                if sports_ops:
-                    opportunities = sorted(
-                        [*opportunities, *sports_ops],
-                        key=lambda o: o.score,
-                        reverse=True,
-                    )
+                    predictions = self._sports_engine.predictions
+                    sports_ops = [
+                        op
+                        for p in predictions
+                        if (op := evaluate_sports_prediction(p)) is not None
+                    ]
+                    if sports_ops:
+                        opportunities = sorted(
+                            [*opportunities, *sports_ops],
+                            key=lambda o: o.score,
+                            reverse=True,
+                        )
             except Exception as exc:
-                log.warning("Sports model scan failed: %s", exc)
+                log.warning("Sports feed scan failed: %s", exc)
 
         opportunities = opportunities[: max(50, settings.max_markets)]
 
