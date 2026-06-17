@@ -129,6 +129,12 @@ class Settings:
     )
     sports_only_mode: bool = _env_bool("SPORTS_ONLY_MODE", False)
     sports_min_volume_24h: int = _env_int("SPORTS_MIN_VOLUME_24H", 1000)
+    sports_model_enabled: bool = _env_bool("SPORTS_MODEL_ENABLED", False)
+    espn_poll_seconds: int = _env_int("ESPN_POLL_SECONDS", 30)
+    espn_backoff_seconds: int = _env_int("ESPN_BACKOFF_SECONDS", 300)
+    sports_match_path: str = os.getenv("SPORTS_MATCH_PATH", "./sports_match.json")
+    sports_model_min_confidence: float = _env_float("SPORTS_MODEL_MIN_CONFIDENCE", 0.40)
+    sports_model_min_edge_pct: float = _env_float("SPORTS_MODEL_MIN_EDGE_PCT", 3.0)
 
 
 settings = Settings()
@@ -161,5 +167,7 @@ def strategy_bankroll_cap(strategy: str) -> float:
     if strategy.endswith("_arbitrage") or strategy.endswith("_mispricing"):
         return settings.bankroll * settings.arb_bankroll_share
     if strategy.startswith("fair_value"):
+        return settings.bankroll * settings.fairvalue_bankroll_share
+    if strategy.startswith("sports_model"):
         return settings.bankroll * settings.fairvalue_bankroll_share
     return settings.bankroll * settings.fairvalue_bankroll_share

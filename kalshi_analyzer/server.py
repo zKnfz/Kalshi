@@ -172,6 +172,14 @@ async def clear_kill_switch_endpoint() -> JSONResponse:
     return JSONResponse({"tripped": False})
 
 
+@app.get("/api/sports/live")
+async def sports_live() -> JSONResponse:
+    if not engine:
+        return JSONResponse({"games": []}, status_code=503)
+    live = engine.latest.get("sports_live") or []
+    return JSONResponse({"games": live, "generated_at": engine.latest.get("generated_at")})
+
+
 @app.post("/api/execute-basket")
 async def execute_basket(body: ExecuteBasketRequest) -> JSONResponse:
     if not engine:

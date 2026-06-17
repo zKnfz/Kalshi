@@ -6,7 +6,7 @@ import random
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from .analyzer import evaluate_markets, group_baskets
+from .analyzer import evaluate_markets, evaluate_sports_prediction, group_baskets
 from .auth import load_auth_from_settings
 from .backtest import append_snapshot
 from .client import KalshiClient
@@ -20,6 +20,7 @@ from .polymarket import (
     load_manual_match_map,
 )
 from .ws_client import KalshiWebSocket
+from .sports_model import SportsModelEngine
 
 log = logging.getLogger(__name__)
 
@@ -95,6 +96,9 @@ class AnalyzerEngine:
         self._poly_match_map = load_manual_match_map()
         if settings.polymarket_enabled:
             self._poly_client = PolymarketClient()
+        self._sports_engine: SportsModelEngine | None = None
+        if settings.sports_model_enabled:
+            self._sports_engine = SportsModelEngine()
         self._poly_markets_cache: list = []
         self._poly_last_fetch: float = 0.0
         self._ws: KalshiWebSocket | None = None
@@ -122,6 +126,8 @@ class AnalyzerEngine:
         self._stop.set()
         if self._ws:
             await self._ws.stop()
+        if self._sports_engine is not None:
+            await self._sports_engine.close()
         if self._task:
             try:
                 await asyncio.wait_for(self._task, timeout=5)
@@ -193,6 +199,23 @@ class AnalyzerEngine:
             except Exception as exc:
                 log.warning("Polymarket scan failed: %s", exc)
 
+        if self._sports_engine is not None:
+            try:
+                predictions = await self._sports_engine.get_predictions(events)
+                sports_ops = [
+                    op
+                    for p in predictions
+                    if (op := evaluate_sports_prediction(p)) is not None
+                ]
+                if sports_ops:
+                    opportunities = sorted(
+                        [*opportunities, *sports_ops],
+                        key=lambda o: o.score,
+                        reverse=True,
+                    )
+            except Exception as exc:
+                log.warning("Sports model scan failed: %s", exc)
+
         opportunities = opportunities[: max(50, settings.max_markets)]
 
         now_iso = _iso_now()
@@ -248,6 +271,11 @@ class AnalyzerEngine:
             },
             "opportunities": [op.to_dict() for op in opportunities],
             "baskets": group_baskets(opportunities),
+            "sports_live": (
+                self._sports_engine.live_snapshot()
+                if self._sports_engine is not None
+                else []
+            ),
         }
 
         delta = self._compute_delta(opportunities, snapshot)
@@ -303,6 +331,7 @@ class AnalyzerEngine:
             "generated_at": snapshot["generated_at"],
             "stats": snapshot["stats"],
             "baskets": snapshot.get("baskets", []),
+            "sports_live": snapshot.get("sports_live", []),
             "added": added,
             "updated": updated,
             "removed": removed,

@@ -521,6 +521,111 @@ main {
   color: var(--info);
 }
 
+.layout {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0 2rem 2rem;
+}
+
+.main-panels {
+  display: flex;
+  gap: 1.25rem;
+  align-items: flex-start;
+}
+
+.main-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.sports-sidebar {
+  width: 280px;
+  flex-shrink: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1rem;
+  position: sticky;
+  top: 6rem;
+  max-height: calc(100vh - 7rem);
+  overflow-y: auto;
+}
+
+.sports-sidebar h2 {
+  margin: 0 0 0.75rem;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.sports-live-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem;
+  margin-bottom: 0.65rem;
+}
+
+.sports-live-card .teams {
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-bottom: 0.25rem;
+}
+
+.sports-live-card .scoreline {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-bottom: 0.5rem;
+}
+
+.prob-bar-wrap {
+  margin: 0.4rem 0;
+}
+
+.prob-bar-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.68rem;
+  color: var(--muted);
+  margin-bottom: 0.2rem;
+}
+
+.prob-bar {
+  height: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  position: relative;
+  overflow: hidden;
+}
+
+.prob-bar .model {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  background: var(--accent);
+  opacity: 0.85;
+}
+
+.prob-bar .kalshi {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  width: 3px;
+  background: var(--info);
+}
+
+.sport-icon {
+  margin-right: 0.25rem;
+}
+
+.model-edge-row {
+  font-size: 0.75rem;
+  color: var(--accent);
+  margin-top: 0.35rem;
+}
+
 .age-tag {
   display: inline-flex;
   align-items: center;
@@ -599,6 +704,14 @@ footer {
   }
   .grid {
     grid-template-columns: 1fr;
+  }
+  .main-panels {
+    flex-direction: column;
+  }
+  .sports-sidebar {
+    width: 100%;
+    position: static;
+    max-height: none;
   }
   .stat {
     min-width: 90px;
