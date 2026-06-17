@@ -24,7 +24,8 @@ body {
   padding: 0;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
     Helvetica, Arial, sans-serif;
-  background: radial-gradient(circle at 20% -10%, #1b2554 0%, var(--bg) 55%) var(--bg);
+  background: radial-gradient(circle at 20% -10%, #1b2554 0%, var(--bg) 55%)
+    var(--bg);
   color: var(--text);
   min-height: 100vh;
 }
@@ -141,7 +142,7 @@ main {
   border-radius: 10px;
   padding: 0.55rem 0.85rem;
   font-size: 0.9rem;
-  min-width: 240px;
+  min-width: 220px;
 }
 
 .controls input[type='text']::placeholder {
@@ -171,13 +172,28 @@ main {
   box-shadow: 0 0 0 1px var(--accent) inset;
 }
 
-.sort {
-  margin-left: auto;
+.sort,
+.slider,
+.toggle {
+  margin-left: 0;
   color: var(--muted);
   font-size: 0.85rem;
   display: flex;
   align-items: center;
   gap: 0.5rem;
+}
+
+.sort {
+  margin-left: auto;
+}
+
+.slider input[type='range'] {
+  accent-color: var(--accent);
+  width: 130px;
+}
+
+.toggle input[type='checkbox'] {
+  accent-color: var(--accent);
 }
 
 .grid {
@@ -197,6 +213,40 @@ main {
   gap: 0.75rem;
   position: relative;
   overflow: hidden;
+  transition: transform 80ms ease-out, box-shadow 80ms ease-out;
+}
+
+.card.updated {
+  animation: glow 1.2s ease-out;
+}
+
+.card.new {
+  animation: pop 280ms ease-out;
+}
+
+@keyframes glow {
+  0% {
+    box-shadow: 0 0 0 2px var(--accent), var(--shadow);
+  }
+  100% {
+    box-shadow: var(--shadow);
+  }
+}
+
+@keyframes pop {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.5;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.card.infeasible {
+  opacity: 0.65;
+  border-color: rgba(248, 113, 113, 0.35);
 }
 
 .card::before {
@@ -252,22 +302,39 @@ main {
   color: var(--danger);
 }
 
-.badge\+ {
+.badge.YESNO {
   background: rgba(244, 114, 182, 0.15);
   color: var(--arb);
 }
 
-.badge.YES\+NO,
-.badge.arb {
-  background: rgba(244, 114, 182, 0.15);
-  color: var(--arb);
+.signal-chips {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
 }
 
-.strategy {
-  font-size: 0.7rem;
+.signal-chip {
   text-transform: uppercase;
+  font-size: 0.6rem;
   letter-spacing: 0.08em;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(96, 165, 250, 0.12);
   color: var(--info);
+  border: 1px solid rgba(96, 165, 250, 0.25);
+  font-weight: 600;
+}
+
+.signal-chip.arb {
+  background: rgba(244, 114, 182, 0.12);
+  color: var(--arb);
+  border-color: rgba(244, 114, 182, 0.3);
+}
+
+.signal-chip.warn {
+  background: rgba(251, 191, 36, 0.12);
+  color: var(--warn);
+  border-color: rgba(251, 191, 36, 0.3);
 }
 
 .metrics {
@@ -328,6 +395,8 @@ main {
 .footrow {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
   font-size: 0.72rem;
   color: var(--muted);
 }
@@ -335,6 +404,36 @@ main {
 .footrow a {
   color: var(--info);
   text-decoration: none;
+}
+
+.copy-btn {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.7rem;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 80ms ease-out;
+}
+
+.copy-btn:hover {
+  background: rgba(110, 231, 183, 0.15);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.age-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.age-tag.stale {
+  color: var(--warn);
 }
 
 footer {
@@ -351,6 +450,39 @@ footer {
   font-size: 0.95rem;
 }
 
+.toast {
+  position: fixed;
+  bottom: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 0.6rem 1rem;
+  font-size: 0.85rem;
+  box-shadow: var(--shadow);
+  z-index: 100;
+  animation: toastIn 200ms ease-out;
+}
+
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 10px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@media (max-width: 900px) {
+  .hide-sm {
+    display: none;
+  }
+}
+
 @media (max-width: 720px) {
   .topbar {
     padding: 1rem;
@@ -358,7 +490,21 @@ footer {
   main {
     padding: 1rem;
   }
+  .controls input[type='text'],
+  .controls select {
+    min-width: 160px;
+  }
   .metrics {
     grid-template-columns: repeat(2, 1fr);
+  }
+  .sort {
+    margin-left: 0;
+  }
+  .grid {
+    grid-template-columns: 1fr;
+  }
+  .stat {
+    min-width: 90px;
+    padding: 0.4rem 0.6rem;
   }
 }

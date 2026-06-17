@@ -27,7 +27,7 @@
           <span class="label">Last tick</span>
           <span id="generated_at" class="value">—</span>
         </div>
-        <div class="stat">
+        <div class="stat hide-sm">
           <span class="label">Events / Markets</span>
           <span id="counts" class="value">—</span>
         </div>
@@ -47,7 +47,7 @@
         <input
           id="filter"
           type="text"
-          placeholder="Filter by title, ticker, strategy…"
+          placeholder="Filter by title, ticker, signal…"
           autocomplete="off"
         />
         <div class="strategy-filters" id="strategy_filters"></div>
@@ -58,16 +58,34 @@
             <option value="edge_pct">Edge %</option>
             <option value="edge">Edge ($)</option>
             <option value="kelly_fraction">Kelly %</option>
+            <option value="suggested_stake">Stake $</option>
             <option value="liquidity">Liquidity</option>
             <option value="volume_24h">24h Volume</option>
+            <option value="age_seconds">Age</option>
           </select>
+        </label>
+        <label class="slider">
+          <span>Min edge <span id="min_edge_val">2.0%</span></span>
+          <input
+            id="min_edge"
+            type="range"
+            min="0"
+            max="25"
+            step="0.5"
+            value="2"
+          />
+        </label>
+        <label class="toggle">
+          <input id="hide_infeasible" type="checkbox" />
+          <span>Hide infeasible</span>
         </label>
       </section>
 
       <section class="grid" id="opps"></section>
 
       <p id="empty" class="empty" hidden>
-        No live opportunities right now — the engine will refresh shortly.
+        No live opportunities match your filters — adjust the min-edge
+        slider or wait for the next tick.
       </p>
     </main>
 
@@ -77,6 +95,8 @@
         advice.</span
       >
     </footer>
+
+    <div id="toast" class="toast" hidden></div>
 
     <script src="/static/app.js"></script>
   </body>
