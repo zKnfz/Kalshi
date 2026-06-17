@@ -7,9 +7,12 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from .analyzer import evaluate_markets
+from .auth import load_auth_from_settings
 from .client import KalshiClient
 from .config import settings
+from .execution import Executor
 from .models import Event, Market, Opportunity
+from .paper import PaperEngine
 
 log = logging.getLogger(__name__)
 
@@ -54,8 +57,11 @@ class AnalyzerEngine:
         self,
         client: KalshiClient | None = None,
         on_update: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
+        executor: Executor | None = None,
+        paper: PaperEngine | None = None,
     ) -> None:
-        self._client = client or KalshiClient()
+        auth = load_auth_from_settings(settings)
+        self._client = client or KalshiClient(auth=auth)
         self._on_update = on_update
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
@@ -69,6 +75,15 @@ class AnalyzerEngine:
         self._last_fingerprints: dict[tuple[str, str], tuple[Any, ...]] = {}
         self._last_opps_by_key: dict[tuple[str, str], dict[str, Any]] = {}
         self._lock = asyncio.Lock()
+
+        if paper is None and settings.execution_mode in ("paper", "live"):
+            paper = PaperEngine(
+                state_path=settings.paper_state_path,
+                starting_bankroll=settings.bankroll,
+                slippage_cents=settings.paper_slippage_cents,
+            )
+        self._paper = paper
+        self._executor = executor or Executor(paper=paper, client=self._client)
 
     @property
     def latest(self) -> dict[str, Any]:
@@ -152,6 +167,19 @@ class AnalyzerEngine:
         for k in stale:
             self._first_seen.pop(k, None)
 
+        paper_pnl = None
+        if self._paper is not None:
+            marks = {
+                m.ticker: {
+                    "yes_mid": (m.mid_price if m.mid_price is not None else 0.5),
+                    "no_mid": (
+                        1 - m.mid_price if m.mid_price is not None else 0.5
+                    ),
+                }
+                for m in all_markets
+            }
+            paper_pnl = self._paper.mark_to_market(marks)
+
         snapshot = {
             "generated_at": now_iso,
             "source": source,
@@ -164,8 +192,11 @@ class AnalyzerEngine:
                 "kelly_fraction_cap": settings.kelly_fraction,
                 "max_bet_pct": settings.max_bet_pct,
                 "min_edge_pct": settings.min_edge_pct,
+                "min_net_edge_pct": settings.min_net_edge_pct,
                 "poll_interval_seconds": settings.poll_interval_seconds,
                 "poll_jitter_pct": settings.poll_jitter_pct,
+                "execution": self._executor.stats(),
+                "paper_pnl": paper_pnl,
             },
             "opportunities": [op.to_dict() for op in opportunities],
         }

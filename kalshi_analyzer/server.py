@@ -126,6 +126,38 @@ async def opportunities() -> JSONResponse:
     return JSONResponse(engine.latest)
 
 
+@app.get("/api/paper")
+async def paper_state() -> JSONResponse:
+    if not engine or engine._paper is None:
+        return JSONResponse({"enabled": False}, status_code=200)
+    return JSONResponse(
+        {"enabled": True, "ledger": engine._paper.snapshot()}
+    )
+
+
+@app.get("/api/execution")
+async def execution_state() -> JSONResponse:
+    if not engine:
+        return JSONResponse({"available": False}, status_code=503)
+    return JSONResponse({"available": True, "stats": engine._executor.stats()})
+
+
+@app.post("/api/kill-switch")
+async def trip_kill_switch() -> JSONResponse:
+    from .execution import write_kill_switch
+
+    path = write_kill_switch()
+    return JSONResponse({"tripped": True, "path": path})
+
+
+@app.delete("/api/kill-switch")
+async def clear_kill_switch_endpoint() -> JSONResponse:
+    from .execution import clear_kill_switch
+
+    clear_kill_switch()
+    return JSONResponse({"tripped": False})
+
+
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
     snap = engine.latest if engine else None
