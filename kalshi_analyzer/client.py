@@ -36,11 +36,52 @@ class KalshiClient:
         await self.close()
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Retry policy:
+
+        * 429 / 503 → dedicated exponential backoff up to 6 attempts
+          starting at 4s (caps at 64s) to play nicely with Kalshi rate
+          limiters.
+        * Other 5xx / transport errors → 4 attempts at 1s/2s/4s.
+        * 4xx other than 429 → no retry (the request is bad).
+        """
+
+        rate_attempt = 0
+        max_rate_attempts = 6
         for attempt in range(4):
             try:
                 resp = await self._client.get(path, params=params)
+                if resp.status_code in (429, 503):
+                    if rate_attempt >= max_rate_attempts:
+                        resp.raise_for_status()
+                    retry_after = resp.headers.get("retry-after")
+                    base = float(retry_after) if retry_after else 4.0 * (2**rate_attempt)
+                    delay = min(64.0, base)
+                    rate_attempt += 1
+                    log.warning(
+                        "GET %s -> %d; backing off %.1fs (rate-attempt %d/%d)",
+                        path,
+                        resp.status_code,
+                        delay,
+                        rate_attempt,
+                        max_rate_attempts,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                if 400 <= resp.status_code < 500:
+                    resp.raise_for_status()
                 resp.raise_for_status()
                 return resp.json()
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code if exc.response else 0
+                if status in (429, 503):
+                    continue
+                if status and 400 <= status < 500:
+                    raise
+                if attempt == 3:
+                    raise
+                delay = 2**attempt
+                log.warning("GET %s failed (%s); retrying in %ss", path, exc, delay)
+                await asyncio.sleep(delay)
             except (httpx.HTTPError, httpx.TransportError) as exc:
                 if attempt == 3:
                     raise

@@ -440,12 +440,39 @@ def analyze_event_dutch_book(event: Event) -> list[Opportunity]:
                     rationale=(
                         f"Event mids sum to {sum_mids:.3f}≠1. Normalizing "
                         f"puts this market's fair at {normalized:.2f} vs "
-                        f"ask {a:.2f}."
+                        f"YES ask {a:.2f}."
                     ),
                     confidence_boost=0.10 - feas_penalty,
                     extra={
                         "event_sum_mids": sum_mids,
                         "normalized_fair": normalized,
+                        "fill_feasible": feasible,
+                        "min_leg_size": min_size,
+                    },
+                )
+                if op:
+                    op.fill_feasible = feasible
+                    opportunities.append(op)
+            no_ask = _safe_cents_to_dollars(m.no_ask)
+            if no_ask is None or no_ask <= 0:
+                continue
+            no_fair = 1.0 - normalized
+            if no_fair > no_ask + 0.005:
+                op = _build_opportunity(
+                    m,
+                    side="NO",
+                    entry_price=no_ask,
+                    fair_price=no_fair,
+                    strategy="dutch_book_mispricing",
+                    rationale=(
+                        f"Event mids sum to {sum_mids:.3f}≠1. Normalized "
+                        f"YES fair {normalized:.2f} ⇒ NO fair {no_fair:.2f}"
+                        f" vs NO ask {no_ask:.2f}."
+                    ),
+                    confidence_boost=0.10 - feas_penalty,
+                    extra={
+                        "event_sum_mids": sum_mids,
+                        "normalized_yes_fair": normalized,
                         "fill_feasible": feasible,
                         "min_leg_size": min_size,
                     },
