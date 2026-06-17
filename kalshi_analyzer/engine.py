@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from .analyzer import evaluate_markets
 from .auth import load_auth_from_settings
+from .backtest import append_snapshot
 from .client import KalshiClient
 from .config import settings
 from .execution import Executor
@@ -230,6 +231,12 @@ class AnalyzerEngine:
         }
 
         delta = self._compute_delta(opportunities, snapshot)
+
+        if settings.backtest_recording:
+            try:
+                append_snapshot(snapshot)
+            except Exception:
+                log.exception("snapshot recording failed")
 
         log.info(
             "tick: %d events, %d markets, %d ops (added=%d updated=%d removed=%d) source=%s",
