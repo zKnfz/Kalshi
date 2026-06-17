@@ -10,6 +10,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from .alerts import AlertDispatcher
 from .config import settings
 from .engine import AnalyzerEngine
 
@@ -71,6 +72,7 @@ class WebSocketBroker:
 
 broker = WebSocketBroker()
 engine: AnalyzerEngine | None = None
+alerts: AlertDispatcher | None = None
 
 
 def _schedule_broadcast(snapshot: dict, delta: dict) -> None:
@@ -79,15 +81,18 @@ def _schedule_broadcast(snapshot: dict, delta: dict) -> None:
     except RuntimeError:
         return
     loop.create_task(broker.broadcast_delta(delta))
+    if alerts and alerts.enabled:
+        loop.create_task(alerts.dispatch(snapshot))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global engine
+    global engine, alerts
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    alerts = AlertDispatcher.from_settings()
     engine = AnalyzerEngine(on_update=_schedule_broadcast)
     await engine.start()
     try:
@@ -95,6 +100,8 @@ async def lifespan(app: FastAPI):
     finally:
         if engine:
             await engine.stop()
+        if alerts:
+            await alerts.close()
 
 
 app = FastAPI(title="Kalshi Edge Analyzer", lifespan=lifespan)
