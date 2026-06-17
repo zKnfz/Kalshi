@@ -51,7 +51,7 @@ def _env_csv_floats(name: str, default: tuple[float, ...]) -> tuple[float, ...]:
     return tuple(out) if out else default
 
 
-@dataclass(frozen=True)
+@dataclass
 class Settings:
     base_url: str = os.getenv(
         "KALSHI_BASE_URL", "https://api.elections.kalshi.com/trade-api/v2"
