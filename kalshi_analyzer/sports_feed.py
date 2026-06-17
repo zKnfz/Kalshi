@@ -197,16 +197,10 @@ def normalize_espn_competition(
     period = int(status_obj.get("period") or 0)
     clock = str(status_obj.get("displayClock") or status_obj.get("clock") or detail or "")
 
-    is_live = (
-        state in {"in", "live"}
-        or "progress" in state
-        or (
-            status_type.get("completed") is False
-            and state not in {"post", "final", "status_final"}
-            and period > 0
-        )
-    )
+    is_live = state in {"in", "live"} or "progress" in state
 
+    if not is_live:
+        return None
     home_score = home["score"]
     away_score = away["score"]
     home_sets = away_sets = 0
@@ -379,6 +373,8 @@ class ESPNClient:
 
     @property
     def live_games(self) -> list[LiveGame]:
+        """Only matches actively in progress (not scheduled/pre)."""
+
         return [g for g in self._last_games if g.is_live]
 
     def _should_fetch(self) -> bool:

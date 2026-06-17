@@ -35,7 +35,8 @@
     minEdgePct: 2.0,
     hideInfeasible: false,
     activeStrategies: new Set(),
-    sportsFilter: false,
+    sportsFilter: true,
+    sportsLiveOnly: true,
     knownStrategies: new Set(),
     collapsedBaskets: new Set(),
     justUpdated: new Map(),
@@ -122,9 +123,11 @@
     chip.textContent = 'Sports';
     chip.addEventListener('click', () => {
       state.sportsFilter = !state.sportsFilter;
+      state.sportsLiveOnly = state.sportsFilter;
       chip.classList.toggle('active', state.sportsFilter);
       render();
     });
+    if (state.sportsFilter) chip.classList.add('active');
     els.strategyFilters.appendChild(chip);
     return chip;
   }
@@ -399,39 +402,32 @@
 
   function sportsLiveCardHTML(g) {
     const gs = g.game_state || g;
-    const modelPct = (g.model_yes_prob ?? 0) * 100;
-    const kalshiPct = (g.kalshi_yes_ask ?? 0) * 100;
-    const edge = g.edge_pct ?? 0;
     const icon = sportIcon({ series_ticker: g.sport, ticker: g.kalshi_ticker, is_sports: true });
     const tournament = gs.tournament ? `<div class="scoreline">${gs.tournament}</div>` : '';
+    const isTennis = g.sport === 'atp' || g.sport === 'wta' || gs.league === 'atp' || gs.league === 'wta';
+    const scoreLine = isTennis
+      ? `Sets ${gs.away_score ?? 0}–${gs.home_score ?? 0}`
+      : `${gs.away_score ?? 0}–${gs.home_score ?? 0}`;
+    const clock = gs.clock || gs.situation || '';
     const kalshiLink = g.kalshi_ticker
       ? `<a href="https://kalshi.com/markets/${encodeURIComponent(g.kalshi_ticker)}" target="_blank" rel="noreferrer">Open on Kalshi ↗</a>`
-      : `<span class="scoreline">No Kalshi market matched</span>`;
-    const probBlock =
-      g.model_yes_prob != null
-        ? `<div class="prob-bar-wrap">
-          <div class="prob-bar-labels"><span>Model ${modelPct.toFixed(0)}%</span><span>Kalshi ${kalshiPct.toFixed(0)}%</span></div>
-          <div class="prob-bar">
-            <span class="model" style="width:${Math.min(100, modelPct)}%"></span>
-            <span class="kalshi" style="left:${Math.min(100, kalshiPct)}%"></span>
-          </div>
-        </div>
-        <div class="model-edge-row">Edge: ${edge.toFixed(1)}%</div>`
-        : '';
+      : '';
     return `
       <div class="sports-live-card">
-        <div class="teams">${icon} ${g.away_team || gs.away_team || '?'} @ ${g.home_team || gs.home_team || '?'}</div>
+        <div class="teams">${icon} ${g.away_team || gs.away_team} @ ${g.home_team || gs.home_team}</div>
         ${tournament}
-        <div class="scoreline">Sets ${gs.away_score ?? 0}–${gs.home_score ?? 0} · ${gs.clock || gs.situation || ''}</div>
-        ${gs.is_live ? '<span class="badge-warn badge-live">🔴 LIVE</span>' : ''}
-        ${probBlock}
+        <div class="scoreline">${scoreLine}${clock ? ` · ${clock}` : ''}</div>
+        <span class="badge-warn badge-live">🔴 LIVE</span>
         ${kalshiLink}
       </div>
     `;
   }
 
   function renderSportsSidebar() {
-    const games = state.sportsLive || [];
+    const games = (state.sportsLive || []).filter((g) => {
+      const gs = g.game_state || g;
+      return gs.is_live !== false;
+    });
     if (!games.length) {
       els.sportsSidebar.hidden = true;
       els.sportsLiveList.innerHTML = '';
@@ -575,9 +571,15 @@
     });
 
     let filteredOps = applyFilters(standaloneOps);
+    if (state.sportsLiveOnly) {
+      filteredOps = filteredOps.filter((o) => o.is_sports);
+    }
     filteredOps = sortOps(filteredOps);
 
     let filteredBaskets = applyBasketFilters(state.baskets || []);
+    if (state.sportsLiveOnly) {
+      filteredBaskets = filteredBaskets.filter((b) => b.is_sports);
+    }
     filteredBaskets = sortBaskets(filteredBaskets);
 
     const totalVisible = filteredOps.length + filteredBaskets.length;
