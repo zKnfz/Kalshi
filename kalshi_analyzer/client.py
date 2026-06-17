@@ -3,28 +3,42 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Any, AsyncIterator
+from urllib.parse import urlparse
 
 import httpx
 
+from .auth import KalshiAuth
 from .config import settings
 
 log = logging.getLogger(__name__)
 
 
 class KalshiClient:
-    """Thin async client for Kalshi's public Trade API v2 endpoints.
+    """Async client for Kalshi's Trade API v2.
 
-    Only read-only endpoints are used (markets, events, single-market
-    orderbooks), so no authentication is required.
+    Without ``auth`` only public read-only endpoints are reachable.
+    Pass a ``KalshiAuth`` to unlock the authenticated paths (portfolio
+    balance/positions, order submission, bulk orderbooks).
     """
 
-    def __init__(self, base_url: str | None = None, timeout: float = 20.0) -> None:
+    def __init__(
+        self,
+        base_url: str | None = None,
+        timeout: float = 20.0,
+        auth: KalshiAuth | None = None,
+    ) -> None:
         self.base_url = (base_url or settings.base_url).rstrip("/")
+        self._sign_path_prefix = urlparse(self.base_url).path or ""
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=timeout,
             headers={"User-Agent": "kalshi-edge-analyzer/0.1"},
         )
+        self._auth = auth
+
+    @property
+    def has_auth(self) -> bool:
+        return self._auth is not None
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -35,21 +49,41 @@ class KalshiClient:
     async def __aexit__(self, *exc: Any) -> None:
         await self.close()
 
-    async def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Retry policy:
+    def _auth_headers(
+        self, method: str, path: str, params: dict[str, Any] | None = None
+    ) -> dict[str, str]:
+        if self._auth is None:
+            return {}
+        signed_path = self._sign_path_prefix + path
+        if params:
+            qs = httpx.QueryParams(params)
+            if str(qs):
+                signed_path = f"{signed_path}?{qs}"
+        return self._auth.signed_headers(method, signed_path)
 
-        * 429 / 503 → dedicated exponential backoff up to 6 attempts
-          starting at 4s (caps at 64s) to play nicely with Kalshi rate
-          limiters.
-        * Other 5xx / transport errors → 4 attempts at 1s/2s/4s.
-        * 4xx other than 429 → no retry (the request is bad).
-        """
-
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
+        authenticated: bool = False,
+    ) -> dict[str, Any]:
         rate_attempt = 0
         max_rate_attempts = 6
         for attempt in range(4):
             try:
-                resp = await self._client.get(path, params=params)
+                headers = (
+                    self._auth_headers(method, path, params) if authenticated else {}
+                )
+                resp = await self._client.request(
+                    method,
+                    path,
+                    params=params,
+                    json=json,
+                    headers=headers or None,
+                )
                 if resp.status_code in (429, 503):
                     if rate_attempt >= max_rate_attempts:
                         resp.raise_for_status()
@@ -58,7 +92,8 @@ class KalshiClient:
                     delay = min(64.0, base)
                     rate_attempt += 1
                     log.warning(
-                        "GET %s -> %d; backing off %.1fs (rate-attempt %d/%d)",
+                        "%s %s -> %d; backing off %.1fs (rate-attempt %d/%d)",
+                        method,
                         path,
                         resp.status_code,
                         delay,
@@ -70,7 +105,9 @@ class KalshiClient:
                 if 400 <= resp.status_code < 500:
                     resp.raise_for_status()
                 resp.raise_for_status()
-                return resp.json()
+                if resp.content:
+                    return resp.json()
+                return {}
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code if exc.response else 0
                 if status in (429, 503):
@@ -80,15 +117,39 @@ class KalshiClient:
                 if attempt == 3:
                     raise
                 delay = 2**attempt
-                log.warning("GET %s failed (%s); retrying in %ss", path, exc, delay)
+                log.warning("%s %s failed (%s); retrying in %ss", method, path, exc, delay)
                 await asyncio.sleep(delay)
             except (httpx.HTTPError, httpx.TransportError) as exc:
                 if attempt == 3:
                     raise
                 delay = 2**attempt
-                log.warning("GET %s failed (%s); retrying in %ss", path, exc, delay)
+                log.warning("%s %s failed (%s); retrying in %ss", method, path, exc, delay)
                 await asyncio.sleep(delay)
         return {}
+
+    async def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Retry policy:
+
+        * 429 / 503 → dedicated exponential backoff up to 6 attempts
+          starting at 4s (caps at 64s).
+        * Other 5xx / transport errors → 4 attempts at 1s/2s/4s.
+        * 4xx other than 429 → no retry (the request is bad).
+        """
+
+        return await self._request("GET", path, params=params, authenticated=False)
+
+    async def get_authenticated(
+        self, path: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        return await self._request("GET", path, params=params, authenticated=True)
+
+    async def post_authenticated(
+        self, path: str, json: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        return await self._request("POST", path, json=json, authenticated=True)
+
+    async def delete_authenticated(self, path: str) -> dict[str, Any]:
+        return await self._request("DELETE", path, authenticated=True)
 
     async def list_markets(
         self,
