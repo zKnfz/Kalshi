@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import math
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Iterable
 
 from .config import settings, strategy_bankroll_cap
 from .fees import per_contract_fee
 from .models import Event, Market, Opportunity
+from .sports import is_sports_market, live_status, series_ticker_for
 
 
 CENT = 1 / 100.0
@@ -137,11 +139,12 @@ def consensus_fair_price(market: Market) -> float | None:
 def liquidity_confidence(market: Market) -> float:
     """Map raw liquidity / volume / spread into a 0-1 confidence score.
 
-    Confidence is additionally decayed by ``last_trade_age_seconds`` once
-    the trade is stale — a market that hasn't printed in many minutes is
-    cheap *because* nobody is interested, so its "edge" is largely
-    illusory.
+    Returns ``0.0`` immediately when ``liquidity <= 0`` — a zero-liquidity
+    leg cannot be traded regardless of edge.
     """
+
+    if market.liquidity <= 0:
+        return 0.0
 
     liq_proxy = max(
         market.liquidity,
@@ -192,6 +195,119 @@ def _orderbook_size_for(side: str, market: Market) -> int | None:
     return None
 
 
+def _leg_fill_feasible(market: Market, side: str) -> bool:
+    """Return whether the top-of-book can fill at least ``MIN_FILL_QTY``."""
+
+    if market.liquidity <= 0:
+        return False
+    size = _orderbook_size_for(side, market)
+    if size is None:
+        return True
+    return size >= settings.min_fill_qty
+
+
+def _market_meta(market: Market) -> dict[str, object]:
+    return {
+        "series_ticker": series_ticker_for(market.ticker, market.event_ticker),
+        "is_sports": is_sports_market(market.ticker, market.event_ticker),
+        "live_status": live_status(market.close_time),
+    }
+
+
+def _apply_market_meta(op: Opportunity, market: Market) -> None:
+    meta = _market_meta(market)
+    op.series_ticker = str(meta["series_ticker"])
+    op.is_sports = bool(meta["is_sports"])
+    op.live_status = meta["live_status"]  # type: ignore[assignment]
+
+
+def _basket_id_for(event: Event) -> str:
+    return event.event_ticker or event.raw.get("series_ticker") or "unknown"
+
+
+def _expected_basket_tickers(event: Event) -> set[str]:
+    return {m.ticker for m in event.markets if m.ticker}
+
+
+def _basket_is_complete(event: Event, tradable: list[Market]) -> bool:
+    """Every mutually-exclusive leg from the event must be present and tradable."""
+
+    if not event.mutually_exclusive:
+        return True
+    expected = _expected_basket_tickers(event)
+    if len(expected) < 2:
+        return True
+    tradable_tickers = {m.ticker for m in tradable}
+    return expected <= tradable_tickers
+
+
+def _incomplete_basket_opportunities(
+    event: Event,
+    tradable: list[Market],
+    *,
+    strategy: str,
+) -> list[Opportunity]:
+    """Surface incomplete baskets without computing fair values or arb edge."""
+
+    basket_id = _basket_id_for(event)
+    series = series_ticker_for(
+        tradable[0].ticker if tradable else "",
+        event.event_ticker,
+    )
+    is_sports = any(
+        is_sports_market(m.ticker, m.event_ticker) for m in tradable
+    )
+    live = next(
+        (live_status(m.close_time) for m in tradable if live_status(m.close_time)),
+        None,
+    )
+    missing = _expected_basket_tickers(event) - {m.ticker for m in tradable}
+    rationale = (
+        f"Incomplete basket: {len(missing)} leg(s) missing from tradable set "
+        f"(dropped by liquidity/spread/volume filter or not fetched). "
+        f"Fair value and arb edge skipped."
+    )
+    out: list[Opportunity] = []
+    for m in tradable:
+        yes_ask = _safe_cents_to_dollars(m.yes_ask) or 0.0
+        out.append(
+            Opportunity(
+                ticker=m.ticker,
+                event_ticker=m.event_ticker,
+                title=m.title or m.ticker,
+                side="YES",
+                strategy=strategy,
+                signal_types=[strategy],
+                entry_price=yes_ask,
+                fair_price=yes_ask,
+                edge=0.0,
+                edge_pct=0.0,
+                fees_per_contract=0.0,
+                net_edge=0.0,
+                net_edge_pct=0.0,
+                kelly_fraction=0.0,
+                suggested_stake=0.0,
+                expected_value=0.0,
+                confidence=0.0,
+                score=0.0,
+                liquidity=m.liquidity,
+                volume_24h=m.volume_24h,
+                spread_cents=m.spread_cents,
+                last_trade_age_seconds=m.last_trade_age_seconds,
+                close_time=m.close_time,
+                rationale=rationale,
+                fill_feasible=False,
+                basket_complete=False,
+                basket_id=basket_id,
+                series_ticker=series,
+                is_sports=is_sports,
+                live_status=live,
+                extra={"missing_legs": sorted(missing)},
+            )
+        )
+    return out
+
+
 def _build_opportunity(
     market: Market,
     side: str,
@@ -229,12 +345,16 @@ def _build_opportunity(
     raw_kelly = kelly_fraction_for_yes(entry_price + fee, fair_price)
     kelly_scaled, stake = size_position(strategy, raw_kelly)
 
-    confidence = min(1.0, liquidity_confidence(market) + confidence_boost)
+    fill_ok = _leg_fill_feasible(market, side)
+    if market.liquidity <= 0 or not fill_ok:
+        confidence = 0.0
+    else:
+        confidence = min(1.0, liquidity_confidence(market) + confidence_boost)
 
     arb_bonus = 1.5 if strategy.endswith("arbitrage") else 1.0
     score = net_edge * confidence * arb_bonus * (1.0 + math.tanh(net_edge_pct / 25.0))
 
-    return Opportunity(
+    op = Opportunity(
         ticker=market.ticker,
         event_ticker=market.event_ticker,
         title=market.title or market.ticker,
@@ -261,6 +381,9 @@ def _build_opportunity(
         rationale=rationale,
         extra=extra or {},
     )
+    op.fill_feasible = fill_ok and market.liquidity > 0
+    _apply_market_meta(op, market)
+    return op
 
 
 def analyze_yes_no_arbitrage(market: Market) -> Opportunity | None:
@@ -288,7 +411,11 @@ def analyze_yes_no_arbitrage(market: Market) -> Opportunity | None:
         return None
     raw_kelly = 1.0
     kelly_scaled, stake = size_position("yes_no_arbitrage", raw_kelly)
-    confidence = min(1.0, liquidity_confidence(market) + 0.3)
+    fill_ok = _leg_fill_feasible(market, "YES") and _leg_fill_feasible(market, "NO")
+    if market.liquidity <= 0 or not fill_ok:
+        confidence = 0.0
+    else:
+        confidence = min(1.0, liquidity_confidence(market) + 0.3)
     score = net_profit * confidence * 2.5
 
     rationale = (
@@ -296,7 +423,7 @@ def analyze_yes_no_arbitrage(market: Market) -> Opportunity | None:
         f"buying both sides nets {net_profit*100:.1f}¢ per pair after "
         f"{pair_fee*100:.2f}¢ in fees."
     )
-    return Opportunity(
+    op = Opportunity(
         ticker=market.ticker,
         event_ticker=market.event_ticker,
         title=market.title or market.ticker,
@@ -328,6 +455,9 @@ def analyze_yes_no_arbitrage(market: Market) -> Opportunity | None:
             "fees_per_pair": pair_fee,
         },
     )
+    op.fill_feasible = fill_ok and market.liquidity > 0
+    _apply_market_meta(op, market)
+    return op
 
 
 def analyze_market_fair_value(market: Market) -> list[Opportunity]:
@@ -371,18 +501,18 @@ def analyze_market_fair_value(market: Market) -> list[Opportunity]:
     return out
 
 
-def _basket_fill_feasibility(markets: list[Market]) -> tuple[bool, int | None]:
+def _basket_fill_feasibility(markets: list[Market], side: str = "YES") -> tuple[bool, int | None]:
     """Return (feasible, min_observed_size) for a dutch-book basket.
 
-    Kalshi's level-1 size isn't always populated in the events payload; if
-    *no* market reports an ask size we conservatively flag feasibility as
-    ``True`` but return ``None`` for the min size. When sizes *are*
-    reported, any leg with size below ``MIN_FILL_QTY`` breaks the basket.
+    Runs before confidence scoring. Any leg with ``liquidity <= 0`` or
+    reported ask size below ``MIN_FILL_QTY`` breaks the basket.
     """
 
     sizes: list[int] = []
     for m in markets:
-        s = _orderbook_size_for("YES", m)
+        if m.liquidity <= 0:
+            return False, 0
+        s = _orderbook_size_for(side, m)
         if s is None:
             continue
         sizes.append(s)
@@ -393,8 +523,24 @@ def _basket_fill_feasibility(markets: list[Market]) -> tuple[bool, int | None]:
 
 
 def analyze_event_dutch_book(event: Event) -> list[Opportunity]:
+    tradable = [m for m in event.markets if is_tradable(m)]
+    quoted = [
+        m
+        for m in event.markets
+        if (m.yes_bid or 0) > 0 or (m.yes_ask or 0) > 0
+    ]
+    if len(quoted) < 2:
+        return []
+
+    basket_complete = _basket_is_complete(event, tradable)
+    basket_id = _basket_id_for(event)
+    if not basket_complete:
+        return _incomplete_basket_opportunities(
+            event, quoted, strategy="dutch_book_arbitrage"
+        )
+
     markets = [
-        m for m in event.markets if (m.yes_bid or 0) > 0 or (m.yes_ask or 0) > 0
+        m for m in tradable if (m.yes_bid or 0) > 0 or (m.yes_ask or 0) > 0
     ]
     if len(markets) < 2:
         return []
@@ -415,8 +561,9 @@ def analyze_event_dutch_book(event: Event) -> list[Opportunity]:
     opportunities: list[Opportunity] = []
     sum_asks = sum(asks)
     sum_mids = sum(mids)
-    feasible, min_size = _basket_fill_feasibility(markets)
-    feas_penalty = 0.4 if not feasible else 0.0
+    feasible, min_size = _basket_fill_feasibility(markets, "YES")
+    zero_liq = any(m.liquidity <= 0 for m in markets)
+    feas_penalty = 0.4 if not feasible or zero_liq else 0.0
 
     if sum_asks < 1.0 - 0.01:
         profit = 1.0 - sum_asks
@@ -447,15 +594,21 @@ def analyze_event_dutch_book(event: Event) -> list[Opportunity]:
                     "event_basket_profit": profit,
                     "basket_size": len(markets),
                     "min_leg_size": min_size,
-                    "fill_feasible": feasible,
+                    "fill_feasible": feasible and not zero_liq,
+                    "basket_id": basket_id,
                 },
             )
             if op:
-                op.fill_feasible = feasible
+                op.fill_feasible = feasible and not zero_liq
+                op.basket_complete = True
+                op.basket_id = basket_id
                 opportunities.append(op)
         return opportunities
 
     if sum_mids > 0 and abs(sum_mids - 1.0) > 0.02:
+        no_feasible, no_min_size = _basket_fill_feasibility(markets, "NO")
+        mis_feasible = feasible and no_feasible and not zero_liq
+        mis_penalty = 0.4 if not mis_feasible else 0.0
         for m, mid, a in zip(markets, mids, asks):
             normalized = mid / sum_mids
             if a > 0 and normalized > a + 0.005:
@@ -470,16 +623,19 @@ def analyze_event_dutch_book(event: Event) -> list[Opportunity]:
                         f"puts this market's fair at {normalized:.2f} vs "
                         f"YES ask {a:.2f}."
                     ),
-                    confidence_boost=0.10 - feas_penalty,
+                    confidence_boost=0.10 - mis_penalty,
                     extra={
                         "event_sum_mids": sum_mids,
                         "normalized_fair": normalized,
-                        "fill_feasible": feasible,
+                        "fill_feasible": mis_feasible,
                         "min_leg_size": min_size,
+                        "basket_id": basket_id,
                     },
                 )
                 if op:
-                    op.fill_feasible = feasible
+                    op.fill_feasible = mis_feasible
+                    op.basket_complete = True
+                    op.basket_id = basket_id
                     opportunities.append(op)
             no_ask = _safe_cents_to_dollars(m.no_ask)
             if no_ask is None or no_ask <= 0:
@@ -497,16 +653,19 @@ def analyze_event_dutch_book(event: Event) -> list[Opportunity]:
                         f"YES fair {normalized:.2f} ⇒ NO fair {no_fair:.2f}"
                         f" vs NO ask {no_ask:.2f}."
                     ),
-                    confidence_boost=0.10 - feas_penalty,
+                    confidence_boost=0.10 - mis_penalty,
                     extra={
                         "event_sum_mids": sum_mids,
                         "normalized_yes_fair": normalized,
-                        "fill_feasible": feasible,
-                        "min_leg_size": min_size,
+                        "fill_feasible": mis_feasible,
+                        "min_leg_size": no_min_size,
+                        "basket_id": basket_id,
                     },
                 )
                 if op:
-                    op.fill_feasible = feasible
+                    op.fill_feasible = mis_feasible
+                    op.basket_complete = True
+                    op.basket_id = basket_id
                     opportunities.append(op)
     return opportunities
 
@@ -528,10 +687,15 @@ def is_tradable(market: Market) -> bool:
       * non-open status
       * absent quotes
       * spread wider than ``MAX_SPREAD_CENTS``
-      * 24h volume below ``MIN_VOLUME_24H``
+      * 24h volume below ``MIN_VOLUME_24H`` (or ``SPORTS_MIN_VOLUME_24H``)
       * liquidity proxy below ``MIN_LIQUIDITY_CENTS``
+      * ``SPORTS_ONLY_MODE`` when not a sports ticker
     """
 
+    if settings.sports_only_mode and not is_sports_market(
+        market.ticker, market.event_ticker
+    ):
+        return False
     if market.status not in {"active", "open", "initialized", ""}:
         return False
     if market.yes_ask is None and market.no_ask is None:
@@ -545,7 +709,12 @@ def is_tradable(market: Market) -> bool:
     if spread > settings.max_spread_cents:
         return False
 
-    if settings.min_volume_24h > 0 and market.volume_24h < settings.min_volume_24h:
+    vol_floor = (
+        settings.sports_min_volume_24h
+        if is_sports_market(market.ticker, market.event_ticker)
+        else settings.min_volume_24h
+    )
+    if vol_floor > 0 and market.volume_24h < vol_floor:
         return False
 
     liquidity_proxy = max(
@@ -584,7 +753,7 @@ def evaluate_markets(events: Iterable[Event]) -> list[Opportunity]:
                 title=ev.title,
                 category=ev.category,
                 mutually_exclusive=True,
-                markets=tradable,
+                markets=ev.markets,
                 raw=ev.raw,
             )
             raw.extend(analyze_event_dutch_book(ev_for_arb))
@@ -607,6 +776,7 @@ def evaluate_markets(events: Iterable[Event]) -> list[Opportunity]:
             secondary = op
         primary.signal_types = merged_signal_types
         primary.fill_feasible = existing.fill_feasible and op.fill_feasible
+        primary.basket_complete = existing.basket_complete and op.basket_complete
         primary.rationale = (
             primary.rationale
             if secondary.rationale in primary.rationale
@@ -615,3 +785,38 @@ def evaluate_markets(events: Iterable[Event]) -> list[Opportunity]:
         by_key[op.key()] = primary
 
     return sorted(by_key.values(), key=lambda o: o.score, reverse=True)
+
+
+def group_baskets(opportunities: Iterable[Opportunity]) -> list[dict]:
+    """Aggregate dutch-book legs by ``basket_id`` for API/UI consumption."""
+
+    baskets: dict[str, list[Opportunity]] = defaultdict(list)
+    for opp in opportunities:
+        if opp.strategy in {"dutch_book_arbitrage", "dutch_book_mispricing"}:
+            bid = opp.basket_id or opp.event_ticker
+            if bid:
+                baskets[bid].append(opp)
+
+    grouped: list[dict] = []
+    for basket_id, legs in baskets.items():
+        if not legs:
+            continue
+        grouped.append(
+            {
+                "basket_id": basket_id,
+                "strategy": legs[0].strategy,
+                "series_ticker": legs[0].series_ticker,
+                "event_ticker": legs[0].event_ticker,
+                "edge_pct": legs[0].edge_pct,
+                "net_edge_pct": min(l.net_edge_pct for l in legs),
+                "total_stake": sum(l.suggested_stake for l in legs),
+                "worst_liquidity": min(l.liquidity for l in legs),
+                "basket_complete": all(l.basket_complete for l in legs),
+                "is_sports": any(l.is_sports for l in legs),
+                "live_status": next(
+                    (l.live_status for l in legs if l.live_status), None
+                ),
+                "legs": [l.to_dict() for l in legs],
+            }
+        )
+    return grouped

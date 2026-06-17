@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -51,6 +52,14 @@ def _env_csv_floats(name: str, default: tuple[float, ...]) -> tuple[float, ...]:
     return tuple(out) if out else default
 
 
+def _env_csv_strs(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    out = tuple(p.strip() for p in raw.split(",") if p.strip())
+    return out if out else default
+
+
 @dataclass
 class Settings:
     base_url: str = os.getenv(
@@ -81,7 +90,7 @@ class Settings:
     min_edge_pct: float = _env_float("MIN_EDGE_PCT", 0.5)
     min_net_edge_pct: float = _env_float("MIN_NET_EDGE_PCT", 1.0)
     assume_taker_fees: bool = _env_bool("ASSUME_TAKER_FEES", True)
-    use_native_ws: bool = _env_bool("USE_NATIVE_WS", False)
+    use_native_ws: bool = _env_bool("USE_NATIVE_WS", True)
     kalshi_key_id: str = os.getenv("KALSHI_KEY_ID", "")
     kalshi_private_key_path: str = os.getenv("KALSHI_PRIVATE_KEY_PATH", "")
     execution_mode: str = os.getenv("EXECUTION_MODE", "off")
@@ -110,9 +119,36 @@ class Settings:
         "BACKTEST_SNAPSHOT_PATH", "./snapshots.jsonl"
     )
     backtest_recording: bool = _env_bool("BACKTEST_RECORDING", False)
+    arb_fill_timeout_seconds: float = _env_float("ARB_FILL_TIMEOUT_SECONDS", 2.0)
+    sports_enabled: bool = _env_bool("SPORTS_ENABLED", True)
+    sports_prefixes: tuple[str, ...] = field(
+        default_factory=lambda: _env_csv_strs(
+            "SPORTS_PREFIXES",
+            ("NFL", "NBA", "MLB", "NHL", "CFB", "SOC", "GOLF", "TEN", "MMA"),
+        )
+    )
+    sports_only_mode: bool = _env_bool("SPORTS_ONLY_MODE", False)
+    sports_min_volume_24h: int = _env_int("SPORTS_MIN_VOLUME_24H", 1000)
 
 
 settings = Settings()
+
+
+def credentials_configured() -> bool:
+    key = (settings.kalshi_key_id or "").strip()
+    path = (settings.kalshi_private_key_path or "").strip()
+    return bool(key and path and Path(path).exists())
+
+
+def effective_native_ws() -> bool:
+    """Auto-enable the native push feed once RSA credentials are configured.
+
+    Set ``USE_NATIVE_WS=false`` to force REST polling even when keys exist.
+    """
+
+    if not credentials_configured():
+        return False
+    return settings.use_native_ws
 
 
 def strategy_bankroll_cap(strategy: str) -> float:
