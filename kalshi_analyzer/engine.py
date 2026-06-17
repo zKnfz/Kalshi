@@ -6,7 +6,7 @@ import random
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from .analyzer import evaluate_markets, evaluate_sports_prediction, group_baskets
+from .analyzer import evaluate_markets, group_baskets
 from .auth import load_auth_from_settings
 from .backtest import append_snapshot
 from .client import KalshiClient
@@ -20,7 +20,6 @@ from .polymarket import (
     load_manual_match_map,
 )
 from .ws_client import KalshiWebSocket
-from .sports_model import SportsModelEngine
 
 log = logging.getLogger(__name__)
 
@@ -96,9 +95,14 @@ class AnalyzerEngine:
         self._poly_match_map = load_manual_match_map()
         if settings.polymarket_enabled:
             self._poly_client = PolymarketClient()
-        self._sports_engine: SportsModelEngine | None = None
+        self._sports_engine = None
         if settings.sports_model_enabled:
-            self._sports_engine = SportsModelEngine()
+            try:
+                from .sports_model import SportsModelEngine
+
+                self._sports_engine = SportsModelEngine()
+            except ImportError as exc:
+                log.warning("Sports model unavailable (install deps): %s", exc)
         self._poly_markets_cache: list = []
         self._poly_last_fetch: float = 0.0
         self._ws: KalshiWebSocket | None = None
@@ -201,6 +205,8 @@ class AnalyzerEngine:
 
         if self._sports_engine is not None:
             try:
+                from .analyzer import evaluate_sports_prediction
+
                 predictions = await self._sports_engine.get_predictions(events)
                 sports_ops = [
                     op

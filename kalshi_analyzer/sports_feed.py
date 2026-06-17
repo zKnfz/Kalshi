@@ -19,20 +19,11 @@ import httpx
 
 from .config import settings
 from .models import Event, Market
+from .sports_catalog import LEAGUE_CONFIGS, kalshi_prefixes_for_league
 
 log = logging.getLogger(__name__)
 
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports"
-
-# sport path, league path, Kalshi series prefix hints
-LEAGUE_CONFIGS: tuple[dict[str, str], ...] = (
-    {"sport": "football", "league": "nfl", "kalshi_prefix": "KXNFL"},
-    {"sport": "basketball", "league": "nba", "kalshi_prefix": "KXNBA"},
-    {"sport": "baseball", "league": "mlb", "kalshi_prefix": "KXMLB"},
-    {"sport": "hockey", "league": "nhl", "kalshi_prefix": "KXNHL"},
-    {"sport": "mma", "league": "ufc", "kalshi_prefix": "KXMMA"},
-    {"sport": "soccer", "league": "fifa.world", "kalshi_prefix": "KXWC"},
-)
 
 
 def _normalize_name(text: str) -> str:
@@ -117,6 +108,7 @@ def normalize_espn_event(event: dict[str, Any], *, sport: str, league: str) -> L
     comp = competitions[0]
     competitors = comp.get("competitors") or []
     home = away = None
+    home_sets = away_sets = 0
     for c in competitors:
         ha = (c.get("homeAway") or "").lower()
         team = c.get("team") or {}
@@ -126,11 +118,25 @@ def normalize_espn_event(event: dict[str, Any], *, sport: str, league: str) -> L
             score = int(score_raw) if score_raw not in (None, "") else 0
         except (TypeError, ValueError):
             score = 0
-        row = {"name": name, "score": score, "abbrev": team.get("abbreviation") or ""}
+        sets_won = 0
+        for line in c.get("linescores") or []:
+            try:
+                if int(line.get("value", 0)) > 0:
+                    sets_won += 1
+            except (TypeError, ValueError):
+                continue
+        row = {
+            "name": name,
+            "score": score,
+            "abbrev": team.get("abbreviation") or "",
+            "sets_won": sets_won,
+        }
         if ha == "home":
             home = row
+            home_sets = sets_won
         elif ha == "away":
             away = row
+            away_sets = sets_won
     if not home or not away:
         return None
 
@@ -171,7 +177,11 @@ def normalize_espn_event(event: dict[str, Any], *, sport: str, league: str) -> L
         situation=situation,
         is_live=is_live,
         last_update=time.time(),
-        raw=event,
+        raw={
+            **event,
+            "_home_sets": home_sets,
+            "_away_sets": away_sets,
+        },
     )
 
 
@@ -211,10 +221,7 @@ def match_game_to_kalshi(
                     return m, ticker
         return None, ticker
 
-    prefix_hint = next(
-        (c["kalshi_prefix"] for c in LEAGUE_CONFIGS if c["league"] == game.league),
-        game.league.upper(),
-    )
+    prefix_hint = kalshi_prefixes_for_league(game.league)
 
     best_market: Market | None = None
     best_ticker = ""
@@ -223,9 +230,7 @@ def match_game_to_kalshi(
     for ev in kalshi_events:
         for m in ev.markets:
             text = _market_search_text(m, ev).upper()
-            if prefix_hint not in text and not any(
-                p in text for p in (f"KX{game.league.upper()}", game.league.upper())
-            ):
+            if not any(p in text for p in prefix_hint):
                 continue
             for team in (game.home_team, game.away_team):
                 sim_home = _name_similarity(team, m.title)
@@ -281,18 +286,23 @@ class ESPNClient:
 
         all_games: list[LiveGame] = []
         for cfg in LEAGUE_CONFIGS:
-            url = f"{ESPN_BASE}/{cfg['sport']}/{cfg['league']}/scoreboard"
+            url = f"{ESPN_BASE}/{cfg.espn_sport}/{cfg.espn_league}/scoreboard"
             try:
                 resp = await self._client.get(url)
                 resp.raise_for_status()
                 payload = resp.json()
                 all_games.extend(
                     normalize_espn_scoreboard(
-                        payload, sport=cfg["sport"], league=cfg["league"]
+                        payload, sport=cfg.espn_sport, league=cfg.espn_league
                     )
                 )
             except Exception as exc:
-                log.warning("ESPN fetch failed for %s/%s: %s", cfg["sport"], cfg["league"], exc)
+                log.warning(
+                    "ESPN fetch failed for %s/%s: %s",
+                    cfg.espn_sport,
+                    cfg.espn_league,
+                    exc,
+                )
 
         live = [g for g in all_games if g.is_live]
         self._current_interval = (

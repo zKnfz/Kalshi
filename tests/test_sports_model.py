@@ -18,12 +18,14 @@ from kalshi_analyzer.sports_feed import (
     match_game_to_kalshi,
     normalize_espn_scoreboard,
 )
+from kalshi_analyzer.sports_catalog import LEAGUE_CONFIGS, sport_key_for_ticker
 from kalshi_analyzer.sports_model import (
     SportsModelEngine,
-    SportsPrediction,
     dixon_coles_home_win_prob,
     predict_game,
+    tennis_win_prob,
 )
+from kalshi_analyzer.sports_types import SportsPrediction
 
 
 MOCK_ESPN_EVENT = {
@@ -239,3 +241,32 @@ def test_manual_match_map_overrides_fuzzy_match(tmp_path, monkeypatch):
     assert ticker == "KXNFL-MANUAL-LEG"
     assert market is not None
     assert market.ticker == "KXNFL-MANUAL-LEG"
+
+
+def test_tennis_set_lead_increases_win_probability():
+    p_even = tennis_win_prob(1, 1)
+    p_home_lead = tennis_win_prob(2, 1)
+    p_home_trail = tennis_win_prob(1, 2)
+    assert p_home_lead > p_even
+    assert p_home_trail < p_even
+
+
+def test_sport_key_detects_tennis_and_esports():
+    assert sport_key_for_ticker("KXATP-2026-FINAL", "KXATP-2026") == "tennis"
+    assert sport_key_for_ticker("KXCS2-MAJOR", "KXCS2") == "esports"
+
+
+def test_league_catalog_includes_tennis_and_college():
+    leagues = {c.espn_league for c in LEAGUE_CONFIGS}
+    assert "atp" in leagues and "wta" in leagues
+    assert "college-football" in leagues
+    assert "mens-college-basketball" in leagues
+
+
+def test_app_imports_without_numpy():
+    import importlib
+
+    import kalshi_analyzer.server as srv
+
+    importlib.reload(srv)
+    assert srv.app.title == "Kalshi Edge Analyzer"

@@ -9,7 +9,7 @@ from .config import settings, strategy_bankroll_cap
 from .fees import per_contract_fee
 from .models import Event, Market, Opportunity
 from .sports import is_sports_market, live_status, series_ticker_for
-from .sports_model import SportsPrediction
+from .sports_types import SportsPrediction
 
 
 CENT = 1 / 100.0

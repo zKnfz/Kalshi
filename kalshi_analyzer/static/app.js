@@ -52,15 +52,17 @@
   };
 
   function sportIcon(o) {
-    const src = (o.series_ticker || o.ticker || o.extra?.sport || '').toUpperCase();
-    if (src.includes('NBA') || src.includes('KXNBA')) return '🏀';
-    if (src.includes('NFL') || src.includes('KXNFL') || src.includes('CFB')) return '🏈';
+    const src = (o.series_ticker || o.ticker || o.extra?.sport || o.sport || '').toUpperCase();
+    if (src.includes('TEN') || src.includes('ATP') || src.includes('WTA') || src.includes('KXTEN')) return '🎾';
+    if (src.includes('NBA') || src.includes('WNBA') || src.includes('CBB') || src.includes('NCAA')) return '🏀';
+    if (src.includes('NFL') || src.includes('CFB') || src.includes('KXNFL')) return '🏈';
     if (src.includes('MLB') || src.includes('KXMLB')) return '⚾';
     if (src.includes('NHL') || src.includes('KXNHL')) return '🏒';
     if (src.includes('MMA') || src.includes('UFC') || src.includes('KXMMA')) return '🥊';
-    if (src.includes('SOC') || src.includes('WC') || src.includes('FIFA') || src.includes('KXWC')) return '⚽';
-    if (src.includes('GOLF')) return '⛳';
-    if (src.includes('TEN')) return '🎾';
+    if (src.includes('GOLF') || src.includes('PGA') || src.includes('LPGA')) return '⛳';
+    if (src.includes('SOC') || src.includes('MLS') || src.includes('EPL') || src.includes('WC') || src.includes('FIFA') || src.includes('UCL')) return '⚽';
+    if (src.includes('CS2') || src.includes('VAL') || src.includes('LOL') || src.includes('DOTA') || src.includes('ESPORT')) return '🎮';
+    if (src.includes('F1') || src.includes('RACING')) return '🏎';
     if (o.is_sports) return '🏟';
     return '';
   }
