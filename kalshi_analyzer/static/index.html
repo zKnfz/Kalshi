@@ -50,7 +50,7 @@
       </div>
     </header>
 
-    <main>
+    <main class="layout">
       <section class="controls">
         <input
           id="filter"
@@ -90,12 +90,21 @@
         </label>
       </section>
 
-      <section class="grid" id="opps"></section>
+      <div class="main-panels">
+        <aside id="sports_sidebar" class="sports-sidebar" hidden>
+          <h2>Live games</h2>
+          <div id="sports_live_list" class="sports-live-list"></div>
+        </aside>
 
-      <p id="empty" class="empty" hidden>
-        No live opportunities match your filters — adjust the min-edge
-        slider or wait for the next tick.
-      </p>
+        <div class="main-content">
+          <section class="grid" id="opps"></section>
+
+          <p id="empty" class="empty" hidden>
+            No live opportunities match your filters — adjust the min-edge
+            slider or wait for the next tick.
+          </p>
+        </div>
+      </div>
     </main>
 
     <footer>

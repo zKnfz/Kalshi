@@ -9,6 +9,7 @@ from .config import settings, strategy_bankroll_cap
 from .fees import per_contract_fee
 from .models import Event, Market, Opportunity
 from .sports import is_sports_market, live_status, series_ticker_for
+from .sports_model import SportsPrediction
 
 
 CENT = 1 / 100.0
@@ -785,6 +786,110 @@ def evaluate_markets(events: Iterable[Event]) -> list[Opportunity]:
         by_key[op.key()] = primary
 
     return sorted(by_key.values(), key=lambda o: o.score, reverse=True)
+
+
+def evaluate_sports_prediction(pred: SportsPrediction) -> Opportunity | None:
+    """Convert a live sports model prediction into a ranked Opportunity."""
+
+    market = pred.market
+    if market is None:
+        return None
+    if not is_tradable(market):
+        return None
+
+    entry_price = pred.kalshi_yes_ask
+    fair_price = pred.model_yes_prob
+    if entry_price <= 0 or entry_price >= 1 or fair_price <= 0 or fair_price >= 1:
+        return None
+
+    edge = fair_price - entry_price
+    if edge <= 0:
+        return None
+
+    edge_pct = edge / entry_price * 100.0
+    if edge_pct < settings.sports_model_min_edge_pct:
+        return None
+
+    fee = per_contract_fee(
+        entry_price,
+        ticker=market.ticker,
+        is_taker=settings.assume_taker_fees,
+    )
+    net_edge = edge - fee
+    net_edge_pct = (net_edge / entry_price * 100.0) if entry_price > 0 else 0.0
+    if net_edge_pct < settings.min_net_edge_pct:
+        return None
+
+    fill_ok = _leg_fill_feasible(market, "YES")
+    gs = pred.game_state or {}
+    last_update = float(gs.get("last_update") or 0.0)
+    if last_update > 0:
+        age = max(
+            0.0,
+            datetime.now(tz=timezone.utc).timestamp() - last_update,
+        )
+        if age > settings.stale_last_age_seconds:
+            pred.confidence *= 0.5 ** (
+                (age - settings.stale_last_age_seconds)
+                / max(settings.stale_last_age_seconds, 1)
+            )
+    if market.liquidity <= 0 or not fill_ok:
+        confidence = 0.0
+    else:
+        confidence = min(1.0, pred.confidence)
+    if confidence < settings.sports_model_min_confidence:
+        return None
+
+    raw_kelly = kelly_fraction_for_yes(entry_price + fee, fair_price)
+    kelly_scaled, stake = size_position("sports_model_edge", raw_kelly)
+    score = net_edge * confidence * (1.0 + math.tanh(net_edge_pct / 20.0))
+
+    rationale = (
+        f"Sports model {fair_price*100:.1f}% vs Kalshi YES ask {entry_price*100:.1f}% "
+        f"({pred.away_team} @ {pred.home_team}, "
+        f"{gs.get('clock', '')} P{gs.get('period', '?')}). "
+        f"Net edge {net_edge_pct:.1f}% after fees."
+    )
+
+    op = Opportunity(
+        ticker=market.ticker,
+        event_ticker=market.event_ticker,
+        title=market.title or market.ticker,
+        side="YES",
+        strategy="sports_model_edge",
+        signal_types=["sports_model_edge"],
+        entry_price=entry_price,
+        fair_price=fair_price,
+        edge=edge,
+        edge_pct=edge_pct,
+        fees_per_contract=fee,
+        net_edge=net_edge,
+        net_edge_pct=net_edge_pct,
+        kelly_fraction=kelly_scaled,
+        suggested_stake=stake,
+        expected_value=net_edge,
+        confidence=confidence,
+        score=score,
+        liquidity=market.liquidity,
+        volume_24h=market.volume_24h,
+        spread_cents=market.spread_cents,
+        last_trade_age_seconds=market.last_trade_age_seconds,
+        close_time=market.close_time,
+        rationale=rationale,
+        fill_feasible=fill_ok and market.liquidity > 0,
+        model_yes_prob=fair_price,
+        game_state=gs,
+        extra={
+            "sport": pred.sport,
+            "home_team": pred.home_team,
+            "away_team": pred.away_team,
+            "game_state": gs,
+        },
+    )
+    _apply_market_meta(op, market)
+    op.is_sports = True
+    op.live_status = "LIVE" if gs.get("is_live") else op.live_status
+    return op
 
 
 def group_baskets(opportunities: Iterable[Opportunity]) -> list[dict]:

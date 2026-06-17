@@ -252,6 +252,8 @@ class Opportunity:
     series_ticker: str = ""
     is_sports: bool = False
     live_status: str | None = None
+    game_state: dict[str, Any] | None = None
+    model_yes_prob: float | None = None
     fees_per_contract: float = 0.0
     net_edge: float = 0.0
     net_edge_pct: float = 0.0
@@ -284,6 +286,7 @@ class Opportunity:
             self.basket_id,
             self.is_sports,
             self.live_status,
+            self.model_yes_prob,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -300,6 +303,10 @@ class Opportunity:
             "series_ticker": self.series_ticker,
             "is_sports": self.is_sports,
             "live_status": self.live_status,
+            "game_state": self.game_state,
+            "model_yes_prob": (
+                round(self.model_yes_prob, 4) if self.model_yes_prob is not None else None
+            ),
             "fees_per_contract": round(self.fees_per_contract, 4),
             "net_edge": round(self.net_edge, 4),
             "net_edge_pct": round(self.net_edge_pct, 2),

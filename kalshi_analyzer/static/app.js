@@ -18,11 +18,14 @@
     execMode: document.getElementById('exec_mode'),
     paperStat: document.getElementById('paper_stat'),
     paperPnl: document.getElementById('paper_pnl'),
+    sportsSidebar: document.getElementById('sports_sidebar'),
+    sportsLiveList: document.getElementById('sports_live_list'),
   };
 
   const state = {
     opps: new Map(),
     baskets: [],
+    sportsLive: [],
     stats: {},
     generatedAt: null,
     source: '…',
@@ -45,7 +48,22 @@
     dutch_book_mispricing: 'Dutch mispricing',
     fair_value_yes: 'Fair-value YES',
     fair_value_no: 'Fair-value NO',
+    sports_model_edge: 'Sports model',
   };
+
+  function sportIcon(o) {
+    const src = (o.series_ticker || o.ticker || o.extra?.sport || '').toUpperCase();
+    if (src.includes('NBA') || src.includes('KXNBA')) return '🏀';
+    if (src.includes('NFL') || src.includes('KXNFL') || src.includes('CFB')) return '🏈';
+    if (src.includes('MLB') || src.includes('KXMLB')) return '⚾';
+    if (src.includes('NHL') || src.includes('KXNHL')) return '🏒';
+    if (src.includes('MMA') || src.includes('UFC') || src.includes('KXMMA')) return '🥊';
+    if (src.includes('SOC') || src.includes('WC') || src.includes('FIFA') || src.includes('KXWC')) return '⚽';
+    if (src.includes('GOLF')) return '⛳';
+    if (src.includes('TEN')) return '🎾';
+    if (o.is_sports) return '🏟';
+    return '';
+  }
 
   function keyOf(o) {
     return `${o.ticker}:${o.side}`;
@@ -240,7 +258,17 @@
     );
   }
 
+  function modelEdgeHTML(o) {
+    if (o.strategy !== 'sports_model_edge' && !(o.signal_types || []).includes('sports_model_edge'))
+      return '';
+    const model = (o.model_yes_prob ?? o.fair_price ?? 0) * 100;
+    const kalshi = (o.entry_price ?? 0) * 100;
+    const edge = o.edge_pct ?? 0;
+    return `<div class="model-edge-row">Model: ${model.toFixed(0)}% | Kalshi: ${kalshi.toFixed(0)}% | Edge: ${edge.toFixed(1)}%</div>`;
+  }
+
   function cardHTML(o) {
+    const icon = sportIcon(o);
     const sideBadge = `<span class="badge ${sideClass(o.side)}">${o.side}</span>`;
     const conf = Math.max(0, Math.min(100, Math.round((o.confidence || 0) * 100)));
     const infeasibleClass = isInfeasible(o) ? ' infeasible' : '';
@@ -260,7 +288,7 @@
         <div class="row">
           <div>
             ${signalChipsHTML(o)}
-            <h3>${o.title}</h3>
+            <h3>${icon ? `<span class="sport-icon">${icon}</span>` : ''}${o.title}</h3>
             <div class="ticker">${o.ticker}</div>
           </div>
           ${sideBadge}
@@ -288,6 +316,7 @@
           <div class="bar" title="Liquidity-, volume-, spread- and freshness-weighted confidence"><span style="width:${conf}%"></span></div>
         </div>
         <div class="rationale">${o.rationale}</div>
+        ${modelEdgeHTML(o)}
         <div class="footrow">
           <span>Stake ≈ ${fmtMoney(o.suggested_stake)}</span>
           <span>Liq ${fmtInt(o.liquidity)} · 24h vol ${fmtInt(o.volume_24h)}</span>
@@ -364,6 +393,41 @@
     showToast._t = setTimeout(() => {
       els.toast.hidden = true;
     }, 1600);
+  }
+
+  function sportsLiveCardHTML(g) {
+    const gs = g.game_state || g;
+    const modelPct = (g.model_yes_prob ?? 0) * 100;
+    const kalshiPct = (g.kalshi_yes_ask ?? 0) * 100;
+    const edge = g.edge_pct ?? 0;
+    const icon = sportIcon({ series_ticker: g.sport, ticker: g.kalshi_ticker, is_sports: true });
+    return `
+      <div class="sports-live-card">
+        <div class="teams">${icon} ${g.away_team || '?'} @ ${g.home_team || '?'}</div>
+        <div class="scoreline">${g.away_team}: ${gs.away_score ?? 0} · ${g.home_team}: ${gs.home_score ?? 0} · ${gs.clock || ''} P${gs.period || '?'}</div>
+        ${gs.is_live ? '<span class="badge-warn badge-live">🔴 LIVE</span>' : ''}
+        <div class="prob-bar-wrap">
+          <div class="prob-bar-labels"><span>Model ${modelPct.toFixed(0)}%</span><span>Kalshi ${kalshiPct.toFixed(0)}%</span></div>
+          <div class="prob-bar">
+            <span class="model" style="width:${Math.min(100, modelPct)}%"></span>
+            <span class="kalshi" style="left:${Math.min(100, kalshiPct)}%"></span>
+          </div>
+        </div>
+        <div class="model-edge-row">Edge: ${edge.toFixed(1)}%</div>
+        <a href="https://kalshi.com/markets/${encodeURIComponent(g.kalshi_ticker || '')}" target="_blank" rel="noreferrer">Open on Kalshi ↗</a>
+      </div>
+    `;
+  }
+
+  function renderSportsSidebar() {
+    const games = state.sportsLive || [];
+    if (!games.length) {
+      els.sportsSidebar.hidden = true;
+      els.sportsLiveList.innerHTML = '';
+      return;
+    }
+    els.sportsSidebar.hidden = false;
+    els.sportsLiveList.innerHTML = games.map(sportsLiveCardHTML).join('');
   }
 
   function attachCopyHandlers() {
@@ -526,6 +590,7 @@
       else if (updatedAt && now - updatedAt < 1500) card.classList.add('updated');
     });
     attachCopyHandlers();
+    renderSportsSidebar();
   }
 
   function applySnapshot(snap) {
@@ -537,6 +602,7 @@
       state.opps.set(keyOf(o), o);
     }
     state.baskets = snap.baskets || [];
+    state.sportsLive = snap.sports_live || [];
     state.stats = snap.stats || {};
     state.generatedAt = snap.generated_at;
     state.source = snap.source;
@@ -560,6 +626,7 @@
       state.justAdded.delete(key);
     }
     if (delta.baskets) state.baskets = delta.baskets;
+    if (delta.sports_live) state.sportsLive = delta.sports_live;
     state.stats = delta.stats || state.stats;
     state.generatedAt = delta.generated_at || state.generatedAt;
     render();
