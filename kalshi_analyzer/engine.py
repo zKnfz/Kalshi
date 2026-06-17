@@ -13,6 +13,11 @@ from .config import settings
 from .execution import Executor
 from .models import Event, Market, Opportunity
 from .paper import PaperEngine
+from .polymarket import (
+    PolymarketClient,
+    find_cross_arbs,
+    load_manual_match_map,
+)
 
 log = logging.getLogger(__name__)
 
@@ -84,6 +89,12 @@ class AnalyzerEngine:
             )
         self._paper = paper
         self._executor = executor or Executor(paper=paper, client=self._client)
+        self._poly_client: PolymarketClient | None = None
+        self._poly_match_map = load_manual_match_map()
+        if settings.polymarket_enabled:
+            self._poly_client = PolymarketClient()
+        self._poly_markets_cache: list = []
+        self._poly_last_fetch: float = 0.0
 
     @property
     def latest(self) -> dict[str, Any]:
@@ -146,6 +157,23 @@ class AnalyzerEngine:
 
         all_markets = [m for ev in events for m in ev.markets]
         opportunities = evaluate_markets(events)
+
+        if self._poly_client is not None:
+            try:
+                poly_markets = await self._fetch_polymarket_with_cache()
+                cross_arbs = find_cross_arbs(
+                    all_markets,
+                    poly_markets,
+                    manual_map=self._poly_match_map,
+                )
+                opportunities = sorted(
+                    [*opportunities, *cross_arbs],
+                    key=lambda o: o.score,
+                    reverse=True,
+                )
+            except Exception as exc:
+                log.warning("Polymarket scan failed: %s", exc)
+
         opportunities = opportunities[: max(50, settings.max_markets)]
 
         now_iso = _iso_now()
@@ -251,6 +279,25 @@ class AnalyzerEngine:
             "updated": updated,
             "removed": removed,
         }
+
+    async def _fetch_polymarket_with_cache(self):
+        """Refresh Polymarket markets at most once every 60 seconds."""
+
+        import time
+
+        now = time.time()
+        if self._poly_client is None:
+            return []
+        if now - self._poly_last_fetch < 60 and self._poly_markets_cache:
+            return self._poly_markets_cache
+        try:
+            pm = await self._poly_client.list_markets(active=True, closed=False)
+        except Exception as exc:
+            log.debug("polymarket list failed: %s", exc)
+            return self._poly_markets_cache
+        self._poly_markets_cache = pm
+        self._poly_last_fetch = now
+        return pm
 
     async def _load_events_from_kalshi(self) -> list[Event]:
         try:
