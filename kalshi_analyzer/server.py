@@ -19,23 +19,45 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 
 class WebSocketBroker:
+    """Tiny pub-sub for the live dashboard.
+
+    Sends each connecting client the full snapshot once, then only
+    deltas (``added`` / ``updated`` / ``removed``) thereafter — so a
+    1000-row opportunity table doesn't get re-serialized every poll.
+    """
+
     def __init__(self) -> None:
         self._clients: set[WebSocket] = set()
         self._lock = asyncio.Lock()
 
-    async def connect(self, ws: WebSocket) -> None:
+    async def connect(self, ws: WebSocket, snapshot: dict | None) -> None:
         await ws.accept()
         async with self._lock:
             self._clients.add(ws)
+        if snapshot is not None:
+            try:
+                await ws.send_text(
+                    json.dumps({"type": "snapshot", "snapshot": snapshot})
+                )
+            except Exception:
+                await self.disconnect(ws)
 
     async def disconnect(self, ws: WebSocket) -> None:
         async with self._lock:
             self._clients.discard(ws)
 
-    async def broadcast(self, payload: dict) -> None:
+    async def broadcast_delta(self, delta: dict) -> None:
         if not self._clients:
             return
-        msg = json.dumps(payload)
+        if not delta["added"] and not delta["updated"] and not delta["removed"]:
+            heartbeat = {
+                "type": "heartbeat",
+                "generated_at": delta.get("generated_at"),
+                "stats": delta.get("stats"),
+            }
+            msg = json.dumps(heartbeat)
+        else:
+            msg = json.dumps(delta)
         async with self._lock:
             dead: list[WebSocket] = []
             for ws in list(self._clients):
@@ -51,12 +73,12 @@ broker = WebSocketBroker()
 engine: AnalyzerEngine | None = None
 
 
-def _schedule_broadcast(snapshot: dict) -> None:
+def _schedule_broadcast(snapshot: dict, delta: dict) -> None:
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return
-    loop.create_task(broker.broadcast(snapshot))
+    loop.create_task(broker.broadcast_delta(delta))
 
 
 @asynccontextmanager
@@ -85,6 +107,13 @@ async def health() -> JSONResponse:
             "status": "ok",
             "demo_mode": settings.demo_mode,
             "poll_interval_seconds": settings.poll_interval_seconds,
+            "poll_jitter_pct": settings.poll_jitter_pct,
+            "max_bet_pct": settings.max_bet_pct,
+            "kelly_fraction_cap": settings.kelly_fraction,
+            "min_edge_pct": settings.min_edge_pct,
+            "max_spread_cents": settings.max_spread_cents,
+            "min_volume_24h": settings.min_volume_24h,
+            "min_fill_qty": settings.min_fill_qty,
             "base_url": settings.base_url,
         }
     )
@@ -99,10 +128,9 @@ async def opportunities() -> JSONResponse:
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
-    await broker.connect(ws)
+    snap = engine.latest if engine else None
+    await broker.connect(ws, snap)
     try:
-        if engine and engine.latest.get("opportunities") is not None:
-            await ws.send_text(json.dumps(engine.latest))
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
