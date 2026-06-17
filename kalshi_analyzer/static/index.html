@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kalshi Edge Analyzer</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">K∆</span>
+        <div>
+          <h1>Kalshi Edge Analyzer</h1>
+          <p class="tagline">
+            Real-time scan for arbitrage and positive-EV opportunities across
+            every open Kalshi market.
+          </p>
+        </div>
+      </div>
+      <div class="status">
+        <div class="stat">
+          <span class="label">Source</span>
+          <span id="source" class="value">…</span>
+        </div>
+        <div class="stat">
+          <span class="label">Last tick</span>
+          <span id="generated_at" class="value">—</span>
+        </div>
+        <div class="stat">
+          <span class="label">Events / Markets</span>
+          <span id="counts" class="value">—</span>
+        </div>
+        <div class="stat">
+          <span class="label">Opportunities</span>
+          <span id="opp_count" class="value">0</span>
+        </div>
+        <div class="stat">
+          <span class="label">Connection</span>
+          <span id="conn" class="value pill">offline</span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="controls">
+        <input
+          id="filter"
+          type="text"
+          placeholder="Filter by title, ticker, strategy…"
+          autocomplete="off"
+        />
+        <div class="strategy-filters" id="strategy_filters"></div>
+        <label class="sort">
+          Sort by
+          <select id="sort">
+            <option value="score">Score</option>
+            <option value="edge_pct">Edge %</option>
+            <option value="edge">Edge ($)</option>
+            <option value="kelly_fraction">Kelly %</option>
+            <option value="liquidity">Liquidity</option>
+            <option value="volume_24h">24h Volume</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="grid" id="opps"></section>
+
+      <p id="empty" class="empty" hidden>
+        No live opportunities right now — the engine will refresh shortly.
+      </p>
+    </main>
+
+    <footer>
+      <span
+        >Read-only signals based on Kalshi public market data. Not financial
+        advice.</span
+      >
+    </footer>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
