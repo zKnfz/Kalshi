@@ -12,3 +12,9 @@ htmlcov/
 *.log
 .idea/
 .vscode/
+
+paper_state.json
+positions.json
+snapshots.jsonl
+polymarket_map.json
+*.tmp
